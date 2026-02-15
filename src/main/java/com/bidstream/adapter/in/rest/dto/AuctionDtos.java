@@ -22,7 +22,7 @@ public final class AuctionDtos {
             @NotNull @DecimalMin(value = "0", inclusive = true) BigDecimal startingPrice,
             BigDecimal reservePrice,
             @NotNull @DecimalMin(value = "0.01") BigDecimal minIncrement,
-            @NotNull @Future Instant startTime,
+            @NotNull Instant startTime,
             @NotNull @Future Instant endTime,
             Integer antiSnipeSeconds) {
     }
