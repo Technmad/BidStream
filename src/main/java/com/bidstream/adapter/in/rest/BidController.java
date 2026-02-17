@@ -1,7 +1,9 @@
 package com.bidstream.adapter.in.rest;
 
 import com.bidstream.adapter.in.rest.dto.BidDtos.BidAcceptedResponse;
+import com.bidstream.adapter.in.rest.dto.BidDtos.BidHistoryEntry;
 import com.bidstream.adapter.in.rest.dto.BidDtos.PlaceBidRequest;
+import com.bidstream.application.BidHistoryService;
 import com.bidstream.application.PlaceBidUseCase;
 import com.bidstream.application.PlaceBidUseCase.PlaceBidResult;
 import com.bidstream.common.security.JwtAuthenticationFilter.AuthenticatedUser;
@@ -10,10 +12,13 @@ import com.bidstream.domain.model.Money;
 import jakarta.validation.Valid;
 import java.util.Currency;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -33,9 +38,16 @@ public class BidController {
     private static final Currency USD = Currency.getInstance("USD");
 
     private final PlaceBidUseCase placeBidUseCase;
+    private final BidHistoryService bidHistoryService;
 
-    public BidController(PlaceBidUseCase placeBidUseCase) {
+    public BidController(PlaceBidUseCase placeBidUseCase, BidHistoryService bidHistoryService) {
         this.placeBidUseCase = placeBidUseCase;
+        this.bidHistoryService = bidHistoryService;
+    }
+
+    @GetMapping
+    public Page<BidHistoryEntry> history(@PathVariable UUID auctionId, Pageable pageable) {
+        return bidHistoryService.forAuction(auctionId, pageable).map(BidHistoryEntry::from);
     }
 
     @PostMapping
