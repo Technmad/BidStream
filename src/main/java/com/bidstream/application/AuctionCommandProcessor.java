@@ -13,6 +13,7 @@ import com.bidstream.domain.model.AuctionItem;
 import com.bidstream.domain.model.BidOutcome;
 import com.bidstream.domain.model.Money;
 import com.bidstream.domain.port.AuctionRepository;
+import com.bidstream.domain.port.PriceCache;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Currency;
 import java.util.Optional;
@@ -45,18 +46,21 @@ public class AuctionCommandProcessor {
     private final ProcessedEventJdbcRepository processedEventRepository;
     private final BidJdbcRepository bidJdbcRepository;
     private final OutboxJdbcRepository outboxRepository;
+    private final PriceCache priceCache;
     private final ObjectMapper objectMapper;
 
     public AuctionCommandProcessor(AuctionWorkingSet workingSet, AuctionRepository auctionRepository,
                                     ProcessedEventJdbcRepository processedEventRepository,
                                     BidJdbcRepository bidJdbcRepository,
                                     OutboxJdbcRepository outboxRepository,
+                                    PriceCache priceCache,
                                     ObjectMapper objectMapper) {
         this.workingSet = workingSet;
         this.auctionRepository = auctionRepository;
         this.processedEventRepository = processedEventRepository;
         this.bidJdbcRepository = bidJdbcRepository;
         this.outboxRepository = outboxRepository;
+        this.priceCache = priceCache;
         this.objectMapper = objectMapper;
     }
 
@@ -88,6 +92,12 @@ public class AuctionCommandProcessor {
 
             BidOutcome.Accepted accepted = (BidOutcome.Accepted) outcome;
             UUID bidId = UUID.randomUUID();
+
+            // Project to Redis synchronously, before the durable writes (PDR §9.6 step 3) - the
+            // ticker (Phase 3) reads this, never the DB, for broadcast.
+            priceCache.setCurrent(cmd.auctionId(), accepted.newPrice(), accepted.newWinnerId(),
+                    accepted.newEndTime());
+            priceCache.markDirty(cmd.auctionId());
 
             bidJdbcRepository.insertIfAbsent(bidId, cmd.auctionId(), cmd.bidderId(), cmd.amount(),
                     cmd.type(), "ACCEPTED", cmd.idempotencyKey(), cmd.occurredAt());
