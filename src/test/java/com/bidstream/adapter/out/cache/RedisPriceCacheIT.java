@@ -69,7 +69,7 @@ class RedisPriceCacheIT {
     }
 
     @Test
-    void acceptedBidProjectsCurrentPriceToRedisAndMarksAuctionDirty() {
+    void acceptedBidProjectsCurrentPriceToRedis() {
         String sellerToken = registerAndLogin("seller");
         String bidderToken = registerAndLogin("bidder");
         Instant start = Instant.now().minus(1, ChronoUnit.MINUTES);
@@ -88,15 +88,16 @@ class RedisPriceCacheIT {
         submitBidCommandUseCase.submit(auctionUuid, bidderId, new BigDecimal("55.00"), "USD",
                 UUID.randomUUID().toString());
 
+        // Note: this app also runs the Phase-3 TickBroadcaster, which continuously drains
+        // (SPOP) auctions:dirty - so membership there is inherently racy to assert against in
+        // the same process and is covered end-to-end instead by TickBroadcasterIT. This test
+        // only asserts the rebuildable projection itself: the price hash.
         String redisKey = RedisPriceCache.currentKey(auctionUuid);
         await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
             String price = (String) redisTemplate.opsForHash().get(redisKey, "price");
             assertThat(price).isNotNull();
             assertThat(new java.math.BigDecimal(price)).isEqualByComparingTo("55.00");
         });
-
-        Boolean isDirty = redisTemplate.opsForSet().isMember("auctions:dirty", auctionId);
-        assertThat(isDirty).isTrue();
     }
 
     @Test
