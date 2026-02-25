@@ -25,6 +25,21 @@ docker compose -f docker/docker-compose.yml up -d
 | Prometheus | http://localhost:9090 |
 | Grafana | http://localhost:3000 (admin/admin) |
 
+## Real-time contract (client-side notes)
+
+Every `/topic/auctions/{id}` message (see `PriceUpdateMessage`) carries a `serverNow` timestamp
+(PDR §15.5). The client is expected to:
+
+1. Record `t0` (send time of any request) and `t1` (receive time of the reply/message carrying
+   `serverNow`); estimate `offset = serverNow − (t0 + t1) / 2`, smoothing over several samples.
+2. Run local countdowns against `endTime − (Date.now() + offset)`, never against the raw
+   `endTime` compared to the client's own unadjusted clock.
+3. Re-estimate the offset on every tick, since `serverNow` arrives with every `PRICE_UPDATE`.
+
+The client clock is cosmetic only — no bid is ever accepted or rejected based on it. The single
+writer's ordering of commands on the auction's partition is the only thing that decides outcomes
+(PDR §11.3), so a badly-skewed client can only be wrong on screen, never in the result it gets.
+
 ## Project layout
 
 Hexagonal (ports & adapters) — see PDR §7.3 for the full rationale:
