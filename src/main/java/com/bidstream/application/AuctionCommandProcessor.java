@@ -65,11 +65,11 @@ public class AuctionCommandProcessor {
     }
 
     @Transactional
-    public void process(BidCommand cmd) {
+    public BidDecisionWaiter.Decision process(BidCommand cmd) {
         Optional<ProcessedEventRecord> alreadyProcessed = processedEventRepository.findById(cmd.eventId());
         if (alreadyProcessed.isPresent()) {
             log.info("Replaying stored outcome for eventId={} (already processed)", cmd.eventId());
-            return;
+            return null;
         }
 
         try {
@@ -87,7 +87,8 @@ public class AuctionCommandProcessor {
                         cmd.eventId(), BidCommand.CURRENT_SCHEMA_VERSION, cmd.auctionId(),
                         cmd.bidderId(), rejected.reason().name(), auction.currentPrice().amount(),
                         auction.minIncrement().amount(), cmd.occurredAt(), cmd.correlationId()));
-                return;
+                return BidDecisionWaiter.Decision.rejected(rejected, auction.currentPrice().amount(),
+                        auction.minIncrement().amount());
             }
 
             BidOutcome.Accepted accepted = (BidOutcome.Accepted) outcome;
@@ -121,6 +122,8 @@ public class AuctionCommandProcessor {
                     cmd.eventId(), BidCommand.CURRENT_SCHEMA_VERSION, cmd.auctionId(), bidId,
                     cmd.bidderId(), cmd.amount(), accepted.previousWinnerId(),
                     accepted.newEndTime(), cmd.occurredAt(), cmd.correlationId()));
+
+            return BidDecisionWaiter.Decision.accepted(accepted, bidId);
         } catch (RuntimeException ex) {
             workingSet.evict(cmd.auctionId());
             throw ex;
