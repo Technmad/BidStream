@@ -18,6 +18,10 @@ public final class BidDtos {
                                        BigDecimal newPrice, boolean extended, Instant newEndTime) {
     }
 
+    /** Returned when the processor hasn't decided within the short synchronous-wait window. */
+    public record BidPendingResponse(UUID bidId, String status, UUID correlationId) {
+    }
+
     public record BidHistoryEntry(UUID id, UUID auctionId, UUID bidderId, BigDecimal amount,
                                    String type, String status, Instant createdAt) {
 

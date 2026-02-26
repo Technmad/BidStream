@@ -2,6 +2,7 @@ package com.bidstream.adapter.in.kafka;
 
 import com.bidstream.adapter.messaging.dto.BidCommand;
 import com.bidstream.application.AuctionCommandProcessor;
+import com.bidstream.application.BidDecisionWaiter;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,9 +25,11 @@ public class AuctionCommandConsumer {
     private static final Logger log = LoggerFactory.getLogger(AuctionCommandConsumer.class);
 
     private final AuctionCommandProcessor processor;
+    private final BidDecisionWaiter decisionWaiter;
 
-    public AuctionCommandConsumer(AuctionCommandProcessor processor) {
+    public AuctionCommandConsumer(AuctionCommandProcessor processor, BidDecisionWaiter decisionWaiter) {
         this.processor = processor;
+        this.decisionWaiter = decisionWaiter;
     }
 
     @KafkaListener(topics = "auction.commands", groupId = "auction-processor", concurrency = "6")
@@ -46,7 +49,13 @@ public class AuctionCommandConsumer {
             return;
         }
 
-        processor.process(command);
+        BidDecisionWaiter.Decision decision = processor.process(command);
+        // Completing after process() returns means the transaction has already committed
+        // (Spring's @Transactional proxy commits before returning), so a caller woken up here
+        // will see consistent state on its next read.
+        if (decision != null) {
+            decisionWaiter.complete(command.eventId(), decision);
+        }
         acknowledgment.acknowledge();
     }
 }

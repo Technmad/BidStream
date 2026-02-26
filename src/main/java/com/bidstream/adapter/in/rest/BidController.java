@@ -2,16 +2,20 @@ package com.bidstream.adapter.in.rest;
 
 import com.bidstream.adapter.in.rest.dto.BidDtos.BidAcceptedResponse;
 import com.bidstream.adapter.in.rest.dto.BidDtos.BidHistoryEntry;
+import com.bidstream.adapter.in.rest.dto.BidDtos.BidPendingResponse;
 import com.bidstream.adapter.in.rest.dto.BidDtos.PlaceBidRequest;
+import com.bidstream.application.BidDecisionWaiter;
 import com.bidstream.application.BidHistoryService;
-import com.bidstream.application.PlaceBidUseCase;
-import com.bidstream.application.PlaceBidUseCase.PlaceBidResult;
+import com.bidstream.application.SubmitBidCommandUseCase;
+import com.bidstream.common.ConflictException;
 import com.bidstream.common.security.JwtAuthenticationFilter.AuthenticatedUser;
 import com.bidstream.domain.model.BidOutcome;
-import com.bidstream.domain.model.Money;
+import com.bidstream.domain.port.BidRepository;
 import jakarta.validation.Valid;
-import java.util.Currency;
+import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -27,21 +31,28 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Phase-1 synchronous bid endpoint (PDR §14.2 contract, minus the async 202/WebSocket split
- * that Phase 2 introduces once bids flow through Kafka). The response here is the final,
- * synchronous decision rather than a queued acknowledgement.
+ * The bid endpoint (PDR §14.2): publishes onto {@code auction.commands} and returns
+ * synchronously if the single-writer processor decides within a short window, otherwise falls
+ * back to {@code 202 Accepted} - the authoritative outcome always arrives over WebSocket (Phase
+ * 3) regardless of which path this call takes.
  */
 @RestController
 @RequestMapping("/api/v1/auctions/{auctionId}/bids")
 public class BidController {
 
-    private static final Currency USD = Currency.getInstance("USD");
+    private static final Duration SYNC_WAIT_TIMEOUT = Duration.ofSeconds(5);
 
-    private final PlaceBidUseCase placeBidUseCase;
+    private final SubmitBidCommandUseCase submitBidCommandUseCase;
+    private final BidDecisionWaiter decisionWaiter;
+    private final BidRepository bidRepository;
     private final BidHistoryService bidHistoryService;
 
-    public BidController(PlaceBidUseCase placeBidUseCase, BidHistoryService bidHistoryService) {
-        this.placeBidUseCase = placeBidUseCase;
+    public BidController(SubmitBidCommandUseCase submitBidCommandUseCase,
+                          BidDecisionWaiter decisionWaiter, BidRepository bidRepository,
+                          BidHistoryService bidHistoryService) {
+        this.submitBidCommandUseCase = submitBidCommandUseCase;
+        this.decisionWaiter = decisionWaiter;
+        this.bidRepository = bidRepository;
         this.bidHistoryService = bidHistoryService;
     }
 
@@ -55,21 +66,41 @@ public class BidController {
                                        @PathVariable UUID auctionId,
                                        @RequestHeader("Idempotency-Key") String idempotencyKey,
                                        @Valid @RequestBody PlaceBidRequest request) {
-        PlaceBidResult result = placeBidUseCase.execute(
-                auctionId, user.id(), Money.of(request.amount(), USD), idempotencyKey);
+        if (bidRepository.existsByIdempotencyKey(auctionId, user.id(), idempotencyKey)) {
+            throw new ConflictException("Duplicate bid: idempotency key already used");
+        }
 
-        if (result.outcome() instanceof BidOutcome.Rejected rejected) {
+        var command = submitBidCommandUseCase.submit(
+                auctionId, user.id(), request.amount(), "USD", idempotencyKey);
+        var waitFuture = decisionWaiter.register(command.eventId());
+
+        try {
+            BidDecisionWaiter.Decision decision =
+                    waitFuture.get(SYNC_WAIT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            return respond(decision);
+        } catch (TimeoutException e) {
+            return ResponseEntity.accepted().body(new BidPendingResponse(
+                    command.eventId(), "PENDING", command.correlationId()));
+        } catch (InterruptedException | java.util.concurrent.ExecutionException e) {
+            Thread.currentThread().interrupt();
+            return ResponseEntity.accepted().body(new BidPendingResponse(
+                    command.eventId(), "PENDING", command.correlationId()));
+        }
+    }
+
+    private ResponseEntity<?> respond(BidDecisionWaiter.Decision decision) {
+        if (decision.outcome() instanceof BidOutcome.Rejected rejected) {
             ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
                     rejected.reason().name());
             problem.setProperty("reason", rejected.reason().name());
-            problem.setProperty("currentPrice", result.currentPrice().amount());
-            problem.setProperty("minIncrement", result.minIncrement().amount());
+            problem.setProperty("currentPrice", decision.currentPrice());
+            problem.setProperty("minIncrement", decision.minIncrement());
             return ResponseEntity.status(HttpStatus.CONFLICT).body(problem);
         }
 
-        BidOutcome.Accepted accepted = (BidOutcome.Accepted) result.outcome();
+        BidOutcome.Accepted accepted = (BidOutcome.Accepted) decision.outcome();
         return ResponseEntity.ok(new BidAcceptedResponse(
-                result.bidId(), "ACCEPTED", accepted.previousWinnerId(),
+                decision.bidId(), "ACCEPTED", accepted.previousWinnerId(),
                 accepted.newPrice().amount(), accepted.extended(), accepted.newEndTime()));
     }
 }
