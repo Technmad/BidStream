@@ -85,6 +85,25 @@ public final class AuctionItem {
     }
 
     /**
+     * Applies a price/winner already decided elsewhere - specifically, by the auto-bid ladder
+     * (PDR §12), which resolves its own equilibrium price under different rules than a single
+     * manual bid (e.g. a fresh auto-bid with no competing leader claims the current price
+     * outright, never subject to {@code placeBid}'s current+increment floor). Callers are
+     * responsible for having validated the auction is open and the winner isn't the seller
+     * before calling this - it applies the decision unconditionally.
+     */
+    public BidOutcome.Accepted applyResolvedBid(UUID winnerId, Money price, Instant now) {
+        UUID previousWinner = currentWinnerId;
+        currentPrice = price;
+        currentWinnerId = winnerId;
+        version++;
+
+        boolean extended = maybeExtendForSniping(now);
+
+        return BidOutcome.accepted(previousWinner, currentWinnerId, currentPrice, extended, endTime);
+    }
+
+    /**
      * If a bid lands within {@code antiSnipeSeconds} of {@code endTime}, push the end time out
      * (PDR §11.2). Applied inside the same writer that decided the bid, so it is race-free.
      */
