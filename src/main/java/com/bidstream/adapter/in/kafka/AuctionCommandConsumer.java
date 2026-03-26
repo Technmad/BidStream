@@ -1,6 +1,7 @@
 package com.bidstream.adapter.in.kafka;
 
 import com.bidstream.adapter.messaging.dto.BidCommand;
+import com.bidstream.adapter.messaging.dto.CloseCommand;
 import com.bidstream.application.AuctionCommandProcessor;
 import com.bidstream.application.BidDecisionWaiter;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -11,13 +12,15 @@ import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 /**
- * Consumer group {@code auction-processor} on {@code auction.commands} (PDR §10.4). Only BID
- * commands exist on the topic until Phase 4 adds CLOSE; concurrency is set to the partition
- * count so each partition is owned by exactly one thread at a time (PDR §9.1).
+ * Consumer group {@code auction-processor} on {@code auction.commands} (PDR §10.4). Carries
+ * both BID and CLOSE commands (PDR §11.3), so the value type here is {@code Object} - Spring's
+ * JsonDeserializer resolves each record to its original producer class via the type header, and
+ * this dispatches on the actual runtime type. Concurrency is set to the partition count so each
+ * partition is owned by exactly one thread at a time (PDR §9.1).
  *
- * <p>The offset is acknowledged only after {@link AuctionCommandProcessor#process} returns
- * successfully (its own transaction already committed) - this is the "offset after flush"
- * invariant (PDR §9.6 rule 1), applied per-message until Phase 5 batches it per-partition.
+ * <p>The offset is acknowledged only after the processor's transaction has committed - this is
+ * the "offset after flush" invariant (PDR §9.6 rule 1), applied per-message until Phase 5
+ * batches it per-partition.
  */
 @Component
 public class AuctionCommandConsumer {
@@ -33,8 +36,8 @@ public class AuctionCommandConsumer {
     }
 
     @KafkaListener(topics = "auction.commands", groupId = "auction-processor", concurrency = "6")
-    public void onMessage(ConsumerRecord<String, BidCommand> record, Acknowledgment acknowledgment) {
-        BidCommand command = record.value();
+    public void onMessage(ConsumerRecord<String, Object> record, Acknowledgment acknowledgment) {
+        Object command = record.value();
         if (command == null) {
             log.error("Poison message on auction.commands at partition={} offset={} - skipping",
                     record.partition(), record.offset());
@@ -42,19 +45,19 @@ public class AuctionCommandConsumer {
             return;
         }
 
-        if (!BidCommand.COMMAND_TYPE.equals(command.commandType())) {
-            log.warn("Unsupported commandType={} for eventId={} - skipping",
-                    command.commandType(), command.eventId());
-            acknowledgment.acknowledge();
-            return;
-        }
-
-        BidDecisionWaiter.Decision decision = processor.process(command);
-        // Completing after process() returns means the transaction has already committed
-        // (Spring's @Transactional proxy commits before returning), so a caller woken up here
-        // will see consistent state on its next read.
-        if (decision != null) {
-            decisionWaiter.complete(command.eventId(), decision);
+        if (command instanceof BidCommand bidCommand) {
+            BidDecisionWaiter.Decision decision = processor.process(bidCommand);
+            // Completing after process() returns means the transaction has already committed
+            // (Spring's @Transactional proxy commits before returning), so a caller woken up
+            // here will see consistent state on its next read.
+            if (decision != null) {
+                decisionWaiter.complete(bidCommand.eventId(), decision);
+            }
+        } else if (command instanceof CloseCommand closeCommand) {
+            processor.processClose(closeCommand);
+        } else {
+            log.warn("Unsupported command type {} at offset={} - skipping",
+                    command.getClass(), record.offset());
         }
         acknowledgment.acknowledge();
     }
