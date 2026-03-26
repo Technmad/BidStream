@@ -1,16 +1,20 @@
 package com.bidstream.application;
 
 import com.bidstream.adapter.in.kafka.AuctionWorkingSet;
+import com.bidstream.adapter.messaging.dto.AuctionEndedEvent;
 import com.bidstream.adapter.messaging.dto.BidCommand;
 import com.bidstream.adapter.messaging.dto.BidRejectedEvent;
+import com.bidstream.adapter.messaging.dto.CloseCommand;
 import com.bidstream.adapter.out.persistence.jdbc.OutboxJdbcRepository;
 import com.bidstream.adapter.out.persistence.jdbc.ProcessedEventJdbcRepository;
 import com.bidstream.adapter.out.persistence.jdbc.ProcessedEventRecord;
+import com.bidstream.adapter.out.persistence.jdbc.SettlementJdbcRepository;
 import com.bidstream.common.NotFoundException;
 import com.bidstream.domain.model.AuctionItem;
 import com.bidstream.domain.model.AutoBid;
 import com.bidstream.domain.model.BidOutcome;
 import com.bidstream.domain.model.BidType;
+import com.bidstream.domain.model.CloseOutcome;
 import com.bidstream.domain.model.Money;
 import com.bidstream.domain.port.AuctionRepository;
 import com.bidstream.domain.port.AutoBidRepository;
@@ -42,6 +46,7 @@ public class AuctionCommandProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(AuctionCommandProcessor.class);
     private static final String BIDS_REJECTED_TOPIC = "bids.rejected";
+    private static final String AUCTIONS_EVENTS_TOPIC = "auctions.events";
 
     private final AuctionWorkingSet workingSet;
     private final AuctionRepository auctionRepository;
@@ -49,6 +54,7 @@ public class AuctionCommandProcessor {
     private final OutboxJdbcRepository outboxRepository;
     private final AutoBidRepository autoBidRepository;
     private final AcceptedBidPersister acceptedBidPersister;
+    private final SettlementJdbcRepository settlementRepository;
     private final ObjectMapper objectMapper;
 
     public AuctionCommandProcessor(AuctionWorkingSet workingSet, AuctionRepository auctionRepository,
@@ -56,6 +62,7 @@ public class AuctionCommandProcessor {
                                     OutboxJdbcRepository outboxRepository,
                                     AutoBidRepository autoBidRepository,
                                     AcceptedBidPersister acceptedBidPersister,
+                                    SettlementJdbcRepository settlementRepository,
                                     ObjectMapper objectMapper) {
         this.workingSet = workingSet;
         this.auctionRepository = auctionRepository;
@@ -63,6 +70,7 @@ public class AuctionCommandProcessor {
         this.outboxRepository = outboxRepository;
         this.autoBidRepository = autoBidRepository;
         this.acceptedBidPersister = acceptedBidPersister;
+        this.settlementRepository = settlementRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -124,6 +132,56 @@ public class AuctionCommandProcessor {
                     accepted.newPrice().amount(), accepted.newWinnerId(), cmd.occurredAt()));
 
             return BidDecisionWaiter.Decision.accepted(accepted, bidId);
+        } catch (RuntimeException ex) {
+            workingSet.evict(cmd.auctionId());
+            throw ex;
+        }
+    }
+
+    /**
+     * Closes an auction (PDR §11.3). Ordered on the same partition as every bid for this
+     * auction, so "did this bid beat the close?" is answered purely by log position - a bid
+     * consumed before this CLOSE has already been applied; one consumed after is rejected
+     * AUCTION_ENDED by {@link AuctionItem#placeBid}. A stale or duplicate CLOSE (already
+     * terminal, or superseded by an anti-snipe extension) is a harmless no-op.
+     */
+    @Transactional
+    public void processClose(CloseCommand cmd) {
+        if (processedEventRepository.findById(cmd.eventId()).isPresent()) {
+            log.info("Replaying stored outcome for CLOSE eventId={} (already processed)", cmd.eventId());
+            return;
+        }
+
+        try {
+            AuctionItem auction = workingSet.getOrSeed(cmd.auctionId(), () -> seedFromCommittedPostgres(cmd.auctionId()));
+            long expectedVersion = auction.version();
+
+            CloseOutcome outcome = auction.close(cmd.scheduledEndTime());
+            if (outcome instanceof CloseOutcome.Ignored ignored) {
+                log.info("Ignoring stale/duplicate CLOSE for auction={}: {}", cmd.auctionId(), ignored.reason());
+                return;
+            }
+
+            boolean persisted = auctionRepository.saveWithOptimisticLock(auction, expectedVersion);
+            if (!persisted) {
+                workingSet.evict(cmd.auctionId());
+                throw new IllegalStateException(
+                        "Optimistic-lock conflict closing auction " + cmd.auctionId() + " - reseeding for retry");
+            }
+            workingSet.put(cmd.auctionId(), auction);
+
+            UUID winnerId = outcome instanceof CloseOutcome.Sold sold ? sold.winnerId() : null;
+            var finalPrice = outcome instanceof CloseOutcome.Sold sold ? sold.finalPrice().amount() : null;
+            String outcomeName = outcome instanceof CloseOutcome.Sold ? "SOLD" : "UNSOLD";
+
+            settlementRepository.insertIfAbsent(cmd.auctionId(), winnerId, finalPrice, outcomeName);
+
+            processedEventRepository.insertIfAbsent(new ProcessedEventRecord(
+                    cmd.eventId(), cmd.auctionId(), outcomeName, null, finalPrice, winnerId, cmd.occurredAt()));
+
+            writeOutboxEvent(cmd.auctionId(), AUCTIONS_EVENTS_TOPIC, new AuctionEndedEvent(
+                    cmd.eventId(), BidCommand.CURRENT_SCHEMA_VERSION, cmd.auctionId(), outcomeName,
+                    winnerId, finalPrice, cmd.occurredAt(), cmd.correlationId()));
         } catch (RuntimeException ex) {
             workingSet.evict(cmd.auctionId());
             throw ex;
