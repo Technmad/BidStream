@@ -5,6 +5,7 @@ import com.bidstream.adapter.out.persistence.repository.AuctionJpaRepository;
 import com.bidstream.domain.model.AuctionItem;
 import com.bidstream.domain.port.AuctionRepository;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Repository;
@@ -44,5 +45,10 @@ public class AuctionRepositoryImpl implements AuctionRepository {
                 auction.endTime(),
                 expectedVersion);
         return updated == 1;
+    }
+
+    @Override
+    public List<AuctionItem> findDueForClose(Instant now) {
+        return jpaRepository.findDueForClose(now).stream().map(AuctionMapper::toDomain).toList();
     }
 }

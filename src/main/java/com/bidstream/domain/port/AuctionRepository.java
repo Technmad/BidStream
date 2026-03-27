@@ -1,6 +1,8 @@
 package com.bidstream.domain.port;
 
 import com.bidstream.domain.model.AuctionItem;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -20,4 +22,7 @@ public interface AuctionRepository {
      * another writer moved first.
      */
     boolean saveWithOptimisticLock(AuctionItem auction, long expectedVersion);
+
+    /** OPEN/EXTENDED auctions whose end time has passed (PDR §11.3 close-trigger scan). */
+    List<AuctionItem> findDueForClose(Instant now);
 }
