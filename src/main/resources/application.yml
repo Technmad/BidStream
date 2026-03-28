@@ -1,6 +1,13 @@
 spring:
   application:
     name: bidstream
+  task:
+    scheduling:
+      pool:
+        # Spring's @Scheduled default is a single-threaded pool - with the tick broadcaster
+        # (~250ms), outbox relay (~500ms), and close-trigger scan (~5s) all competing for it,
+        # one slow tick could starve the others indefinitely. Each gets its own thread.
+        size: 4
   datasource:
     url: jdbc:postgresql://localhost:5433/bidstream
     username: bidstream
