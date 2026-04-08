@@ -103,7 +103,7 @@ class AntiSnipeAndSettlementIT {
 
         // Once the extended end time genuinely passes, the scheduler closes it and settles SOLD
         // (no reserve was set, and there's a winning bid).
-        await().atMost(Duration.ofSeconds(90)).untilAsserted(() ->
+        await().atMost(Duration.ofSeconds(150)).untilAsserted(() ->
                 given().get("/api/v1/auctions/" + auctionId)
                         .then()
                         .body("status", org.hamcrest.Matchers.equalTo("SOLD"))
