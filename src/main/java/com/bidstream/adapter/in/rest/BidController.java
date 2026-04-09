@@ -4,6 +4,7 @@ import com.bidstream.adapter.in.rest.dto.BidDtos.BidAcceptedResponse;
 import com.bidstream.adapter.in.rest.dto.BidDtos.BidHistoryEntry;
 import com.bidstream.adapter.in.rest.dto.BidDtos.BidPendingResponse;
 import com.bidstream.adapter.in.rest.dto.BidDtos.PlaceBidRequest;
+import com.bidstream.adapter.out.cache.IdempotencyKeyGuard;
 import com.bidstream.application.BidDecisionWaiter;
 import com.bidstream.application.BidHistoryService;
 import com.bidstream.application.SubmitBidCommandUseCase;
@@ -46,14 +47,16 @@ public class BidController {
     private final BidDecisionWaiter decisionWaiter;
     private final BidRepository bidRepository;
     private final BidHistoryService bidHistoryService;
+    private final IdempotencyKeyGuard idempotencyKeyGuard;
 
     public BidController(SubmitBidCommandUseCase submitBidCommandUseCase,
                           BidDecisionWaiter decisionWaiter, BidRepository bidRepository,
-                          BidHistoryService bidHistoryService) {
+                          BidHistoryService bidHistoryService, IdempotencyKeyGuard idempotencyKeyGuard) {
         this.submitBidCommandUseCase = submitBidCommandUseCase;
         this.decisionWaiter = decisionWaiter;
         this.bidRepository = bidRepository;
         this.bidHistoryService = bidHistoryService;
+        this.idempotencyKeyGuard = idempotencyKeyGuard;
     }
 
     @GetMapping
@@ -66,6 +69,12 @@ public class BidController {
                                        @PathVariable UUID auctionId,
                                        @RequestHeader("Idempotency-Key") String idempotencyKey,
                                        @Valid @RequestBody PlaceBidRequest request) {
+        // Two-tier idempotency (PDR §13): the Redis fast-path sheds an obvious duplicate cheaply;
+        // the DB check right after remains authoritative regardless of whether the Redis key
+        // exists, expired, or Redis was unavailable.
+        if (!idempotencyKeyGuard.firstUse(auctionId, user.id(), idempotencyKey)) {
+            throw new ConflictException("Duplicate bid: idempotency key already used");
+        }
         if (bidRepository.existsByIdempotencyKey(auctionId, user.id(), idempotencyKey)) {
             throw new ConflictException("Duplicate bid: idempotency key already used");
         }
