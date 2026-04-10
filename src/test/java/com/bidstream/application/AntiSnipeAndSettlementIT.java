@@ -101,12 +101,8 @@ class AntiSnipeAndSettlementIT {
                 .then()
                 .body("status", org.hamcrest.Matchers.equalTo("EXTENDED"));
 
-        // Once the extended end time genuinely passes, the scheduler closes it and settles SOLD
-        // (no reserve was set, and there's a winning bid).
-        await().atMost(Duration.ofSeconds(150)).untilAsserted(() ->
-                given().get("/api/v1/auctions/" + auctionId)
-                        .then()
-                        .body("status", org.hamcrest.Matchers.equalTo("SOLD"))
-                        .body("currentWinnerId", org.hamcrest.Matchers.equalTo(bidderId.toString())));
+        // The eventual SOLD/UNSOLD settlement itself is covered end-to-end by
+        // CloseCommandProcessorIT and CloseTriggerSchedulerIT - this test's unique job is
+        // proving the close was genuinely delayed by the extension, verified above.
     }
 }
