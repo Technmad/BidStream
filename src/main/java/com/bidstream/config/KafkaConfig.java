@@ -2,8 +2,8 @@ package com.bidstream.config;
 
 import java.util.HashMap;
 import java.util.Map;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
@@ -16,6 +16,7 @@ import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.listener.ContainerProperties.AckMode;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
@@ -23,12 +24,13 @@ import org.springframework.util.backoff.FixedBackOff;
 
 /**
  * Bounds retry on a permanently-failing record (e.g. an auction that no longer exists) so it
- * cannot retry forever and block its partition. This is a stopgap — full dead-letter routing
- * (PDR §10.5) lands in the Phase 5 hardening branch; for now a poison message is logged and
- * skipped after a few attempts rather than wedging the consumer indefinitely.
+ * cannot retry forever and block its partition, then routes it to {@code auction.commands.DLQ}
+ * with its original headers and the failure reason (PDR §10.5) rather than losing it silently.
  */
 @Configuration
 public class KafkaConfig {
+
+    private static final String AUCTION_COMMANDS_DLQ = "auction.commands.DLQ";
 
     @Bean
     public ConsumerFactory<String, Object> auctionCommandsConsumerFactory(KafkaProperties kafkaProperties) {
@@ -39,20 +41,18 @@ public class KafkaConfig {
 
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, Object> kafkaListenerContainerFactory(
-            ConsumerFactory<String, Object> auctionCommandsConsumerFactory) {
+            ConsumerFactory<String, Object> auctionCommandsConsumerFactory,
+            KafkaTemplate<String, Object> kafkaTemplate) {
         ConcurrentKafkaListenerContainerFactory<String, Object> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(auctionCommandsConsumerFactory);
         factory.getContainerProperties().setAckMode(AckMode.MANUAL);
 
-        // Retry a failing record 3 times (1s apart), then skip it and move on - see class javadoc.
-        DefaultErrorHandler errorHandler = new DefaultErrorHandler(
-                (ConsumerRecord<?, ?> record, Exception ex) -> {
-                    org.slf4j.LoggerFactory.getLogger(KafkaConfig.class).error(
-                            "Giving up on record at partition={} offset={} after retries exhausted: {}",
-                            record.partition(), record.offset(), ex.getMessage());
-                },
-                new FixedBackOff(1000L, 3));
+        // Retry a failing record 3 times (1s apart), then dead-letter it and move on so the
+        // partition keeps flowing for every other auction (PDR §10.5, §19).
+        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaTemplate,
+                (record, ex) -> new TopicPartition(AUCTION_COMMANDS_DLQ, -1));
+        DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 3));
         factory.setCommonErrorHandler(errorHandler);
         return factory;
     }
