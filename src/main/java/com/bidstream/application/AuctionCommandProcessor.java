@@ -20,6 +20,10 @@ import com.bidstream.domain.port.AuctionRepository;
 import com.bidstream.domain.port.AutoBidRepository;
 import com.bidstream.domain.service.AutoBidResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Currency;
 import java.util.List;
@@ -56,6 +60,10 @@ public class AuctionCommandProcessor {
     private final AcceptedBidPersister acceptedBidPersister;
     private final SettlementJdbcRepository settlementRepository;
     private final ObjectMapper objectMapper;
+    private final Counter bidsAcceptedCounter;
+    private final Counter replaysCounter;
+    private final Timer decisionLatencyTimer;
+    private final MeterRegistry meterRegistry;
 
     public AuctionCommandProcessor(AuctionWorkingSet workingSet, AuctionRepository auctionRepository,
                                     ProcessedEventJdbcRepository processedEventRepository,
@@ -63,7 +71,7 @@ public class AuctionCommandProcessor {
                                     AutoBidRepository autoBidRepository,
                                     AcceptedBidPersister acceptedBidPersister,
                                     SettlementJdbcRepository settlementRepository,
-                                    ObjectMapper objectMapper) {
+                                    ObjectMapper objectMapper, MeterRegistry meterRegistry) {
         this.workingSet = workingSet;
         this.auctionRepository = auctionRepository;
         this.processedEventRepository = processedEventRepository;
@@ -72,6 +80,16 @@ public class AuctionCommandProcessor {
         this.acceptedBidPersister = acceptedBidPersister;
         this.settlementRepository = settlementRepository;
         this.objectMapper = objectMapper;
+        this.meterRegistry = meterRegistry;
+        // PDR §18: bid accept/reject rate, replay/dedup hit rate, decision latency.
+        this.bidsAcceptedCounter = Counter.builder("bidstream.bids").tag("outcome", "accepted")
+                .description("Bids decided by the auction-processor").register(meterRegistry);
+        this.replaysCounter = Counter.builder("bidstream.processor.replays")
+                .description("Commands short-circuited by the processed_events dedup gate")
+                .register(meterRegistry);
+        this.decisionLatencyTimer = Timer.builder("bidstream.bid.decision.latency")
+                .description("Time from a command's occurredAt to its durable decision (PDR §4)")
+                .register(meterRegistry);
     }
 
     @Transactional
@@ -79,6 +97,7 @@ public class AuctionCommandProcessor {
         Optional<ProcessedEventRecord> alreadyProcessed = processedEventRepository.findById(cmd.eventId());
         if (alreadyProcessed.isPresent()) {
             log.info("Replaying stored outcome for eventId={} (already processed)", cmd.eventId());
+            replaysCounter.increment();
             return null;
         }
 
@@ -89,8 +108,11 @@ public class AuctionCommandProcessor {
 
             Money amount = Money.of(cmd.amount(), Currency.getInstance(cmd.currency()));
             BidOutcome outcome = auction.placeBid(cmd.bidderId(), amount, cmd.occurredAt());
+            decisionLatencyTimer.record(Duration.between(cmd.occurredAt(), Instant.now()));
 
             if (outcome instanceof BidOutcome.Rejected rejected) {
+                meterRegistry.counter("bidstream.bids", "outcome", "rejected", "reason",
+                        rejected.reason().name()).increment();
                 processedEventRepository.insertIfAbsent(new ProcessedEventRecord(
                         cmd.eventId(), cmd.auctionId(), "REJECTED", rejected.reason().name(),
                         null, null, cmd.occurredAt()));
@@ -130,6 +152,7 @@ public class AuctionCommandProcessor {
             processedEventRepository.insertIfAbsent(new ProcessedEventRecord(
                     cmd.eventId(), cmd.auctionId(), "ACCEPTED", null,
                     accepted.newPrice().amount(), accepted.newWinnerId(), cmd.occurredAt()));
+            bidsAcceptedCounter.increment();
 
             return BidDecisionWaiter.Decision.accepted(accepted, bidId);
         } catch (RuntimeException ex) {
@@ -149,6 +172,7 @@ public class AuctionCommandProcessor {
     public void processClose(CloseCommand cmd) {
         if (processedEventRepository.findById(cmd.eventId()).isPresent()) {
             log.info("Replaying stored outcome for CLOSE eventId={} (already processed)", cmd.eventId());
+            replaysCounter.increment();
             return;
         }
 
