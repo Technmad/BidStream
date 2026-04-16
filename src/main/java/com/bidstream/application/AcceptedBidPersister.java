@@ -5,6 +5,7 @@ import com.bidstream.adapter.messaging.dto.BidCommand;
 import com.bidstream.adapter.out.persistence.jdbc.BidJdbcRepository;
 import com.bidstream.adapter.out.persistence.jdbc.OutboxJdbcRepository;
 import com.bidstream.domain.model.BidOutcome;
+import com.bidstream.domain.port.LeaderboardCache;
 import com.bidstream.domain.port.PriceCache;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -24,13 +25,16 @@ public class AcceptedBidPersister {
     private static final String BIDS_ACCEPTED_TOPIC = "bids.accepted";
 
     private final PriceCache priceCache;
+    private final LeaderboardCache leaderboardCache;
     private final BidJdbcRepository bidJdbcRepository;
     private final OutboxJdbcRepository outboxRepository;
     private final ObjectMapper objectMapper;
 
-    public AcceptedBidPersister(PriceCache priceCache, BidJdbcRepository bidJdbcRepository,
+    public AcceptedBidPersister(PriceCache priceCache, LeaderboardCache leaderboardCache,
+                                 BidJdbcRepository bidJdbcRepository,
                                  OutboxJdbcRepository outboxRepository, ObjectMapper objectMapper) {
         this.priceCache = priceCache;
+        this.leaderboardCache = leaderboardCache;
         this.bidJdbcRepository = bidJdbcRepository;
         this.outboxRepository = outboxRepository;
         this.objectMapper = objectMapper;
@@ -43,6 +47,7 @@ public class AcceptedBidPersister {
         // ticker (Phase 3) reads this, never the DB, for broadcast.
         priceCache.setCurrent(auctionId, accepted.newPrice(), accepted.newWinnerId(), accepted.newEndTime());
         priceCache.markDirty(auctionId);
+        leaderboardCache.recordBid(auctionId, bidderId, amount);
 
         bidJdbcRepository.insertIfAbsent(bidId, auctionId, bidderId, amount, type, "ACCEPTED",
                 idempotencyKey, occurredAt);
