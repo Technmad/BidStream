@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bidstream-config
+data:
+  # Spring Boot's relaxed env-var binding maps these straight onto application.yml's
+  # spring.datasource/data.redis/kafka keys - no code changes needed to run in-cluster.
+  SPRING_DATASOURCE_URL: jdbc:postgresql://bidstream-postgres:5432/bidstream
+  SPRING_DATA_REDIS_HOST: bidstream-redis
+  SPRING_DATA_REDIS_PORT: "6379"
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: bidstream-kafka:9092
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: bidstream
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: bidstream
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: bidstream
+spec:
+  # At least 2 of the 3+ replicas must stay up during voluntary disruption (node drains,
+  # cluster upgrades) - each replica is a Kafka consumer-group member, so losing all of them
+  # at once would stall every auction's single-writer partition until rebalance completes.
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: bidstream
