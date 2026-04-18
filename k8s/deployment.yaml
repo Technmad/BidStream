@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bidstream
+  labels:
+    app: bidstream
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: bidstream
+  template:
+    metadata:
+      labels:
+        app: bidstream
+    spec:
+      containers:
+        - name: bidstream
+          image: bidstream:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: bidstream-config
+            - secretRef:
+                name: bidstream-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 768Mi
+            limits:
+              cpu: "2"
+              memory: 1536Mi
+          # PDR §20: liveness/readiness backed by DB/Kafka/Redis health indicators, not just
+          # "the JVM is up" - a broker/DB outage must take the pod out of rotation.
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 5
+          # Give in-flight bid decisions a chance to finish (§9.6 per-command transactions are
+          # short) and the Kafka consumer group a graceful leave before the pod is killed.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 5"]
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bidstream
+spec:
+  selector:
+    app: bidstream
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
