@@ -50,3 +50,18 @@ application/  use-case orchestrators
 adapter/      in (rest, ws, kafka) / out (persistence, cache, messaging)
 config/       Spring wiring
 ```
+
+## Testing
+
+`./gradlew test` runs unit tests and integration tests (`*IT`) alike; the integration tests run
+against the real local Docker stack rather than Testcontainers — see
+[`docs/RUNBOOK.md`](docs/RUNBOOK.md) for how to run them and
+[ADR-0003](docs/adr/0003-integration-tests-against-local-stack-not-testcontainers.md) for why.
+A k6 load-test scenario lives in [`load-test/`](load-test/).
+
+## Operations
+
+[`docs/RUNBOOK.md`](docs/RUNBOOK.md) covers monitoring, common incidents (DLQ messages, stuck
+schedulers, missing bid partitions, rate-limit tuning), and known limitations. Kubernetes
+manifests are in [`k8s/`](k8s/). Key architectural decisions are recorded as ADRs in
+[`docs/adr/`](docs/adr/).
