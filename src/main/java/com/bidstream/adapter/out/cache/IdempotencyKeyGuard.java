@@ -2,6 +2,9 @@ package com.bidstream.adapter.out.cache;
 
 import java.time.Duration;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -15,6 +18,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class IdempotencyKeyGuard {
 
+    private static final Logger log = LoggerFactory.getLogger(IdempotencyKeyGuard.class);
     private static final Duration TTL = Duration.ofHours(24);
 
     private final StringRedisTemplate redisTemplate;
@@ -26,7 +30,15 @@ public class IdempotencyKeyGuard {
     /** Returns {@code true} if this is the first time this key has been seen (safe to proceed). */
     public boolean firstUse(UUID auctionId, UUID bidderId, String idempotencyKey) {
         String key = "idem:" + auctionId + ":" + bidderId + ":" + idempotencyKey;
-        Boolean firstUse = redisTemplate.opsForValue().setIfAbsent(key, "1", TTL);
-        return Boolean.TRUE.equals(firstUse);
+        try {
+            Boolean firstUse = redisTemplate.opsForValue().setIfAbsent(key, "1", TTL);
+            return Boolean.TRUE.equals(firstUse);
+        } catch (DataAccessException e) {
+            // Redis is a load optimization here, never the correctness mechanism - degrade to
+            // "treat as first use" and let the downstream durable guard decide, exactly as this
+            // class's own contract promises.
+            log.warn("Idempotency fast-path unavailable (Redis error) - deferring to the durable guard", e);
+            return true;
+        }
     }
 }
