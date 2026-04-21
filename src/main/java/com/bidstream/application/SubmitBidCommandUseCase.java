@@ -11,9 +11,7 @@ import org.springframework.stereotype.Service;
 /**
  * Edge-side half of the async bid pipeline (PDR §9.1, §14.2): stamps {@code eventId} and
  * {@code occurredAt} once, here, and publishes onto {@code auction.commands} keyed by
- * {@code auctionId} so Kafka orders it against every other command for that auction. Not yet
- * wired to the public REST endpoint — that cutover happens once the processor, dedup ledger,
- * and outbox relay are all in place (see the async bid-endpoint branch later in Phase 2).
+ * {@code auctionId} so Kafka orders it against every other command for that auction.
  */
 @Service
 public class SubmitBidCommandUseCase {
