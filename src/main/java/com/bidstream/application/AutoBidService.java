@@ -93,8 +93,14 @@ public class AutoBidService {
         AutoBidResolver.Leader leader = existingLeader == null ? null
                 : new AutoBidResolver.Leader(existingLeader.bidderId(), existingLeader.maxAmount(),
                         existingLeader.createdAt());
-        AutoBidResolver.Resolution resolution = AutoBidResolver.resolve(priceBeforeThisEvent,
+        var resolutionOpt = AutoBidResolver.resolve(priceBeforeThisEvent,
                 auction.minIncrement(), leader, new AutoBidResolver.Challenger(bidderId, maxAmount, createdAt));
+        if (resolutionOpt.isEmpty()) {
+            // The auto-bid is already saved as a standing instruction above; its max just
+            // doesn't clear the floor to win anything yet - nothing else to do.
+            return;
+        }
+        AutoBidResolver.Resolution resolution = resolutionOpt.get();
 
         // Also skip if this bidder is already exactly where they'd resolve to (idempotent re-set).
         if (resolution.winnerId().equals(auction.currentWinnerId())
