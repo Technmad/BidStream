@@ -2,6 +2,7 @@ package com.bidstream.domain.service;
 
 import com.bidstream.domain.model.Money;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -30,25 +31,37 @@ public final class AutoBidResolver {
      * @param minIncrement the auction's minimum increment
      * @param leader       the current auto-bid leader, or {@code null} if none
      * @param challenger   the new manual bid or auto-bid being resolved against the leader
+     * @return the resolved ladder step, or {@link Optional#empty()} when there is no leader and
+     *         the challenger's own max doesn't even clear the same floor a manual bid must clear
+     *         ({@code currentPrice + minIncrement}, per {@code AuctionItem.placeBid}) - their
+     *         auto-bid is still recorded as a standing instruction by the caller, it just doesn't
+     *         win anything yet.
      */
-    public static Resolution resolve(Money currentPrice, Money minIncrement, Leader leader,
-                                      Challenger challenger) {
+    public static Optional<Resolution> resolve(Money currentPrice, Money minIncrement, Leader leader,
+                                                Challenger challenger) {
         if (leader == null) {
-            // No competition yet: the challenger simply claims the current price - never
-            // reveals more than that, whatever their own max might be.
-            return new Resolution(challenger.bidderId(), currentPrice, true);
+            // No competition yet, but the challenger's max still has to clear the same floor a
+            // manual bid would - otherwise their stated maximum doesn't justify winning at all.
+            Money floor = currentPrice.plus(minIncrement);
+            if (challenger.max().isLessThan(floor)) {
+                return Optional.empty();
+            }
+            // Never reveals more than the current price, whatever their own max might be.
+            return Optional.of(new Resolution(challenger.bidderId(), currentPrice, true));
         }
 
-        // Exact tie on max: earliest-submitted auto-bid wins, i.e. the leader keeps it.
-        boolean challengerTakesLead = challenger.max().isGreaterThan(leader.max());
+        // Exact tie on max: earliest-submitted bid wins outright, regardless of which argument
+        // position it was passed in as - not just "the leader keeps it by convention."
+        boolean challengerTakesLead = challenger.max().isGreaterThan(leader.max())
+                || (challenger.max().equals(leader.max()) && challenger.createdAt().isBefore(leader.createdAt()));
 
         if (!challengerTakesLead) {
             Money price = minOf(leader.max(), challenger.max().plus(minIncrement));
-            return new Resolution(leader.bidderId(), price, false);
+            return Optional.of(new Resolution(leader.bidderId(), price, false));
         }
 
         Money price = minOf(challenger.max(), leader.max().plus(minIncrement));
-        return new Resolution(challenger.bidderId(), price, true);
+        return Optional.of(new Resolution(challenger.bidderId(), price, true));
     }
 
     private static Money minOf(Money a, Money b) {

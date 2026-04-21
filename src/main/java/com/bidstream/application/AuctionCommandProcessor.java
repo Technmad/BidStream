@@ -236,10 +236,13 @@ public class AuctionCommandProcessor {
             return;
         }
 
+        // leader is non-null here (checked above), so resolve() always returns a resolution -
+        // the empty case only applies to the no-leader floor check.
         AutoBidResolver.Resolution resolution = AutoBidResolver.resolve(
                 priceBeforeThisCommand, auction.minIncrement(),
                 new AutoBidResolver.Leader(leaderAutoBid.bidderId(), leaderAutoBid.maxAmount(), leaderAutoBid.createdAt()),
-                new AutoBidResolver.Challenger(manualBidderId, manualAmount, occurredAt));
+                new AutoBidResolver.Challenger(manualBidderId, manualAmount, occurredAt))
+                .orElseThrow();
 
         // Always apply the resolved outcome - it supersedes placeBid's raw acceptance whenever a
         // competing auto-bid exists, whether the manual bidder still wins (at a capped price) or
