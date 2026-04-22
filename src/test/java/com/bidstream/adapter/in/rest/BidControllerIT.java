@@ -72,7 +72,7 @@ class BidControllerIT {
                 .header("Idempotency-Key", UUID.randomUUID().toString())
                 .contentType("application/json")
                 .body("{\"amount\":55.00}")
-                .post("/api/v1/auctions/" + auctionId + "/bids")
+                .post("/api/v1/auctions/" + auctionId + "/bids?wait=true")
                 .then()
                 .statusCode(200)
                 .body("status", equalTo("ACCEPTED"))
@@ -97,7 +97,7 @@ class BidControllerIT {
                 .header("Idempotency-Key", UUID.randomUUID().toString())
                 .contentType("application/json")
                 .body("{\"amount\":52.00}")
-                .post("/api/v1/auctions/" + auctionId + "/bids")
+                .post("/api/v1/auctions/" + auctionId + "/bids?wait=true")
                 .then()
                 .statusCode(409)
                 .body("reason", equalTo("BELOW_MIN_INCREMENT"));
@@ -113,7 +113,7 @@ class BidControllerIT {
                 .header("Idempotency-Key", UUID.randomUUID().toString())
                 .contentType("application/json")
                 .body("{\"amount\":60.00}")
-                .post("/api/v1/auctions/" + auctionId + "/bids")
+                .post("/api/v1/auctions/" + auctionId + "/bids?wait=true")
                 .then()
                 .statusCode(409)
                 .body("reason", equalTo("SELF_BID"));
@@ -131,7 +131,7 @@ class BidControllerIT {
                 .header("Idempotency-Key", idempotencyKey)
                 .contentType("application/json")
                 .body("{\"amount\":55.00}")
-                .post("/api/v1/auctions/" + auctionId + "/bids")
+                .post("/api/v1/auctions/" + auctionId + "/bids?wait=true")
                 .then()
                 .statusCode(200);
 
@@ -140,7 +140,7 @@ class BidControllerIT {
                 .header("Idempotency-Key", idempotencyKey)
                 .contentType("application/json")
                 .body("{\"amount\":60.00}")
-                .post("/api/v1/auctions/" + auctionId + "/bids")
+                .post("/api/v1/auctions/" + auctionId + "/bids?wait=true")
                 .then()
                 .statusCode(409);
     }
@@ -155,13 +155,13 @@ class BidControllerIT {
         given().header("Authorization", "Bearer " + aliceToken)
                 .header("Idempotency-Key", UUID.randomUUID().toString())
                 .contentType("application/json").body("{\"amount\":55.00}")
-                .post("/api/v1/auctions/" + auctionId + "/bids")
+                .post("/api/v1/auctions/" + auctionId + "/bids?wait=true")
                 .then().statusCode(200);
 
         given().header("Authorization", "Bearer " + bobToken)
                 .header("Idempotency-Key", UUID.randomUUID().toString())
                 .contentType("application/json").body("{\"amount\":65.00}")
-                .post("/api/v1/auctions/" + auctionId + "/bids")
+                .post("/api/v1/auctions/" + auctionId + "/bids?wait=true")
                 .then().statusCode(200)
                 .body("newPrice", equalTo(65.00f));
 
@@ -170,5 +170,26 @@ class BidControllerIT {
                 .then()
                 .body("currentPrice", equalTo(65.00f))
                 .body("version", equalTo(2));
+    }
+
+    @Test
+    void defaultResponseIsAsync202RegardlessOfHowFastTheProcessorDecides() {
+        // PDR §14.2: bids are async by default (the edge-ack SLO is p99 < 20ms) - the caller
+        // never sees a synchronous verdict unless it explicitly opts in with ?wait=true
+        // (QA-REVIEW.md Critical finding: this used to always block up to 5s and return the
+        // decision body directly).
+        String sellerToken = registerAndLogin("seller");
+        String bidderToken = registerAndLogin("bidder");
+        String auctionId = createOpenAuction(sellerToken);
+
+        given()
+                .header("Authorization", "Bearer " + bidderToken)
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .contentType("application/json")
+                .body("{\"amount\":55.00}")
+                .post("/api/v1/auctions/" + auctionId + "/bids")
+                .then()
+                .statusCode(202)
+                .body("status", equalTo("PENDING"));
     }
 }

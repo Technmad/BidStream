@@ -67,7 +67,7 @@ class BidHistoryIT {
                 .header("Idempotency-Key", UUID.randomUUID().toString())
                 .contentType("application/json")
                 .body("{\"amount\":" + amount + "}")
-                .post("/api/v1/auctions/" + auctionId + "/bids")
+                .post("/api/v1/auctions/" + auctionId + "/bids?wait=true")
                 .then()
                 .statusCode(200);
     }
