@@ -29,13 +29,15 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The bid endpoint (PDR §14.2): publishes onto {@code auction.commands} and returns
- * synchronously if the single-writer processor decides within a short window, otherwise falls
- * back to {@code 202 Accepted} - the authoritative outcome always arrives over WebSocket (Phase
- * 3) regardless of which path this call takes.
+ * The bid endpoint (PDR §14.2): publishes onto {@code auction.commands} and, by default, returns
+ * {@code 202 Accepted} immediately (the edge-ack SLO is p99 < 20ms - it never waits on Kafka).
+ * The authoritative accepted/rejected decision is always pushed over WebSocket, correlated by
+ * {@code correlationId}. Clients that prefer a synchronous response can opt into a short-lived
+ * server-side wait with {@code ?wait=true}, per §14.2's "optional short-lived server-side wait."
  */
 @RestController
 @RequestMapping("/api/v1/auctions/{auctionId}/bids")
@@ -68,6 +70,7 @@ public class BidController {
     public ResponseEntity<?> placeBid(@AuthenticationPrincipal AuthenticatedUser user,
                                        @PathVariable UUID auctionId,
                                        @RequestHeader("Idempotency-Key") String idempotencyKey,
+                                       @RequestParam(defaultValue = "false") boolean wait,
                                        @Valid @RequestBody PlaceBidRequest request) {
         // Two-tier idempotency (PDR §13): the Redis fast-path sheds an obvious duplicate cheaply;
         // the DB check right after remains authoritative regardless of whether the Redis key
@@ -81,6 +84,14 @@ public class BidController {
 
         var command = submitBidCommandUseCase.submit(
                 auctionId, user.id(), request.amount(), "USD", idempotencyKey);
+        if (!wait) {
+            return ResponseEntity.accepted().body(new BidPendingResponse(
+                    command.eventId(), "PENDING", command.correlationId()));
+        }
+
+        // Opt-in synchronous wait (PDR §14.2) - the command is already durable in Kafka before
+        // any waiting starts, so a timeout here only means the client didn't get the fast path,
+        // never that the bid was lost.
         var waitFuture = decisionWaiter.register(command.eventId());
 
         try {
