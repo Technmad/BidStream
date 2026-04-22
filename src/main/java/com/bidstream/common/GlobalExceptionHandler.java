@@ -18,6 +18,15 @@ public class GlobalExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
     }
 
+    @ExceptionHandler(BidRejectedException.class)
+    public ProblemDetail handleBidRejected(BidRejectedException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.reason().name());
+        problem.setProperty("reason", ex.reason().name());
+        problem.setProperty("currentPrice", ex.currentPrice());
+        problem.setProperty("minIncrement", ex.minIncrement());
+        return problem;
+    }
+
     @ExceptionHandler(NotFoundException.class)
     public ProblemDetail handleNotFound(NotFoundException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
