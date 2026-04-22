@@ -100,7 +100,7 @@ class AutoBidControllerIT {
                 .header("Idempotency-Key", UUID.randomUUID().toString())
                 .contentType("application/json")
                 .body("{\"amount\":120.00}")
-                .post("/api/v1/auctions/" + auctionId + "/bids")
+                .post("/api/v1/auctions/" + auctionId + "/bids?wait=true")
                 .then().statusCode(200);
 
         await().atMost(Duration.ofSeconds(15)).untilAsserted(() ->
@@ -130,7 +130,7 @@ class AutoBidControllerIT {
                 .header("Idempotency-Key", UUID.randomUUID().toString())
                 .contentType("application/json")
                 .body("{\"amount\":55.00}")
-                .post("/api/v1/auctions/" + auctionId + "/bids")
+                .post("/api/v1/auctions/" + auctionId + "/bids?wait=true")
                 .then().statusCode(200);
 
         await().atMost(Duration.ofSeconds(15)).untilAsserted(() ->

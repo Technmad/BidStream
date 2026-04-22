@@ -2,7 +2,8 @@ package com.bidstream.application;
 
 import com.bidstream.adapter.messaging.dto.BidCommand;
 import com.bidstream.adapter.out.cache.EdgeBidPreCheck;
-import com.bidstream.common.ConflictException;
+import com.bidstream.common.BidRejectedException;
+import com.bidstream.domain.model.BidRejectReason;
 import com.bidstream.domain.port.EventPublisher;
 import java.math.BigDecimal;
 import java.util.UUID;
@@ -31,7 +32,7 @@ public class SubmitBidCommandUseCase {
         // Cheap shed of obviously-invalid load (PDR §9.3) - a hint only; the processor remains
         // the authority, so a stale/missing Redis value never blocks a plausible bid.
         if (edgeBidPreCheck.check(auctionId, amount) == EdgeBidPreCheck.Result.OBVIOUSLY_TOO_LOW) {
-            throw new ConflictException("Bid amount is below the current known price");
+            throw new BidRejectedException(BidRejectReason.BELOW_MIN_INCREMENT);
         }
 
         BidCommand command = BidCommand.of(auctionId, bidderId, amount, currency, idempotencyKey);
