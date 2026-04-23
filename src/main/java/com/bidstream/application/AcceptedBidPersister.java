@@ -55,7 +55,8 @@ public class AcceptedBidPersister {
         try {
             String json = objectMapper.writeValueAsString(new BidAcceptedEvent(
                     eventId, BidCommand.CURRENT_SCHEMA_VERSION, auctionId, bidId, bidderId,
-                    amount, accepted.previousWinnerId(), accepted.newEndTime(), occurredAt, correlationId));
+                    amount, accepted.previousWinnerId(), accepted.newEndTime(), accepted.extended(),
+                    occurredAt, correlationId));
             outboxRepository.insert(auctionId, BIDS_ACCEPTED_TOPIC, auctionId.toString(), json);
         } catch (Exception e) {
             throw new IllegalStateException("Failed to serialize bids.accepted outbox event", e);
