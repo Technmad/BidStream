@@ -6,6 +6,7 @@ import com.bidstream.common.security.JwtService;
 import com.bidstream.common.security.RateLimitFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -33,7 +34,8 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/auth/**").permitAll()
                         .requestMatchers("/actuator/health/**", "/actuator/prometheus").permitAll()
                         .requestMatchers("/ws/**").permitAll()
-                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/v1/auctions/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/auctions/**").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auctions").hasAuthority("ROLE_SELLER")
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterAfter(new RateLimitFilter(rateLimiter), JwtAuthenticationFilter.class);
