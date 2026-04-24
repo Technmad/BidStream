@@ -31,8 +31,11 @@ public class AuthService {
         if (userRepository.existsByUsernameOrEmail(username, email)) {
             throw new ConflictException("Username or email already in use");
         }
+        // The PDR's auth model (§17) specs ROLE_USER/ROLE_SELLER/ROLE_ADMIN but never describes
+        // a separate seller-application/approval flow - every registered user can both buy and
+        // sell, matching how real marketplaces (eBay included) actually work.
         User user = new User(UUID.randomUUID(), username, email,
-                passwordEncoder.encode(rawPassword), Set.of("ROLE_USER"), Instant.now());
+                passwordEncoder.encode(rawPassword), Set.of("ROLE_USER", "ROLE_SELLER"), Instant.now());
         return userRepository.save(user);
     }
 
