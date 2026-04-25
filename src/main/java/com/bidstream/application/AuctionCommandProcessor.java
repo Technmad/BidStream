@@ -5,6 +5,7 @@ import com.bidstream.adapter.messaging.dto.AuctionEndedEvent;
 import com.bidstream.adapter.messaging.dto.BidCommand;
 import com.bidstream.adapter.messaging.dto.BidRejectedEvent;
 import com.bidstream.adapter.messaging.dto.CloseCommand;
+import com.bidstream.adapter.out.persistence.jdbc.BidIdempotencyKeyJdbcRepository;
 import com.bidstream.adapter.out.persistence.jdbc.OutboxJdbcRepository;
 import com.bidstream.adapter.out.persistence.jdbc.ProcessedEventJdbcRepository;
 import com.bidstream.adapter.out.persistence.jdbc.ProcessedEventRecord;
@@ -13,6 +14,7 @@ import com.bidstream.common.NotFoundException;
 import com.bidstream.domain.model.AuctionItem;
 import com.bidstream.domain.model.AutoBid;
 import com.bidstream.domain.model.BidOutcome;
+import com.bidstream.domain.model.BidRejectReason;
 import com.bidstream.domain.model.BidType;
 import com.bidstream.domain.model.CloseOutcome;
 import com.bidstream.domain.model.Money;
@@ -59,6 +61,7 @@ public class AuctionCommandProcessor {
     private final AutoBidRepository autoBidRepository;
     private final AcceptedBidPersister acceptedBidPersister;
     private final SettlementJdbcRepository settlementRepository;
+    private final BidIdempotencyKeyJdbcRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
     private final Counter bidsAcceptedCounter;
     private final Counter replaysCounter;
@@ -71,6 +74,7 @@ public class AuctionCommandProcessor {
                                     AutoBidRepository autoBidRepository,
                                     AcceptedBidPersister acceptedBidPersister,
                                     SettlementJdbcRepository settlementRepository,
+                                    BidIdempotencyKeyJdbcRepository idempotencyKeyRepository,
                                     ObjectMapper objectMapper, MeterRegistry meterRegistry) {
         this.workingSet = workingSet;
         this.auctionRepository = auctionRepository;
@@ -79,6 +83,7 @@ public class AuctionCommandProcessor {
         this.autoBidRepository = autoBidRepository;
         this.acceptedBidPersister = acceptedBidPersister;
         this.settlementRepository = settlementRepository;
+        this.idempotencyKeyRepository = idempotencyKeyRepository;
         this.objectMapper = objectMapper;
         this.meterRegistry = meterRegistry;
         // PDR §18: bid accept/reject rate, replay/dedup hit rate, decision latency.
@@ -103,6 +108,16 @@ public class AuctionCommandProcessor {
 
         try {
             AuctionItem auction = workingSet.getOrSeed(cmd.auctionId(), () -> seedFromCommittedPostgres(cmd.auctionId()));
+
+            // The true, atomic, cross-request duplicate guard (docs/adr/0005) - distinct from
+            // the replay check above, which only catches an exact redelivery of this same
+            // command (same eventId). This catches a genuine second client request reusing the
+            // same Idempotency-Key with a different eventId/occurredAt, which bids' own
+            // partition-key-constrained unique constraint cannot.
+            if (!idempotencyKeyRepository.claim(cmd.auctionId(), cmd.bidderId(), cmd.idempotencyKey())) {
+                return rejectDuplicateIdempotencyKey(cmd, auction);
+            }
+
             long expectedVersion = auction.version();
             Money priceBeforeThisCommand = auction.currentPrice();
 
@@ -261,6 +276,27 @@ public class AuctionCommandProcessor {
         acceptedBidPersister.persist(auctionId, leaderAutoBid.bidderId(), resolution.price().amount(),
                 BidType.AUTO.name(), syntheticIdempotencyKey, occurredAt, autoBidRowId, resolvedOutcome,
                 UUID.randomUUID(), UUID.randomUUID());
+    }
+
+    /**
+     * The idempotency-key claim above failed - a different command already used this exact
+     * {@code (auctionId, bidderId, idempotencyKey)} triple. Rejected exactly like any other
+     * decision: recorded on {@code processed_events} and published to {@code bids.rejected}, so
+     * it flows through the same WS/notifier path as every other rejection.
+     */
+    private BidDecisionWaiter.Decision rejectDuplicateIdempotencyKey(BidCommand cmd, AuctionItem auction) {
+        BidOutcome.Rejected rejected = BidOutcome.rejected(BidRejectReason.DUPLICATE_IDEMPOTENCY_KEY);
+        meterRegistry.counter("bidstream.bids", "outcome", "rejected", "reason",
+                rejected.reason().name()).increment();
+        processedEventRepository.insertIfAbsent(new ProcessedEventRecord(
+                cmd.eventId(), cmd.auctionId(), "REJECTED", rejected.reason().name(),
+                null, null, cmd.occurredAt()));
+        writeOutboxEvent(cmd.auctionId(), BIDS_REJECTED_TOPIC, new BidRejectedEvent(
+                cmd.eventId(), BidCommand.CURRENT_SCHEMA_VERSION, cmd.auctionId(),
+                cmd.bidderId(), rejected.reason().name(), auction.currentPrice().amount(),
+                auction.minIncrement().amount(), cmd.occurredAt(), cmd.correlationId()));
+        return BidDecisionWaiter.Decision.rejected(rejected, auction.currentPrice().amount(),
+                auction.minIncrement().amount());
     }
 
     private AuctionItem seedFromCommittedPostgres(UUID auctionId) {
