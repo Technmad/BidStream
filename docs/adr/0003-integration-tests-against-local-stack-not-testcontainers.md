@@ -28,3 +28,8 @@ Postgres/Kafka/Redis endpoints (`localhost:5433`/`9092`/`6379`) exactly as a dev
 - If Docker Desktop's Testcontainers compatibility is fixed in a future version, reintroducing
   ephemeral containers is a legitimate follow-up - nothing here is architecturally opposed to it,
   it was purely an environment constraint at the time this was built.
+
+**Update:** `.github/workflows/ci.yml` now runs `./gradlew build` in CI against this exact same
+`docker/docker-compose.yml` stack (GitHub's Ubuntu runners ship Docker + Compose v2 preinstalled),
+so this decision no longer implies "and therefore no CI can run these tests" - it was true when
+first written and is fixed by automating the identical local workflow rather than by changing it.

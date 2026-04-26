@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Same local stack every developer already runs (docker/docker-compose.yml) - the
+      # integration tests connect to real Postgres/Kafka/Redis rather than Testcontainers
+      # (see docs/adr/0003), so CI just needs to bring that stack up first. Only the three
+      # services the test suite actually touches - kafka-ui/prometheus/grafana are dev
+      # observability niceties, not needed to run ./gradlew build.
+      - name: Start Postgres, Redis, and Kafka
+        run: docker compose -f docker/docker-compose.yml up -d --wait postgres redis kafka
+
+      - name: Build and test
+        run: ./gradlew build --console=plain
+
+      - name: Tear down the stack
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v
