@@ -88,7 +88,11 @@ before relying on them at real scale.
 
 ## Known limitations (see also `k8s/README.md`)
 
-- The `outbox` table has no pruning job (see [ADR-0004](adr/0004-transactional-outbox-for-event-publishing.md)).
+- §9.6 write-behind batching (per-partition, 50-record/50ms flush) isn't implemented - every
+  command still commits its own transaction and offset individually. Deliberately deferred: it's
+  currently the *safer* state, since no un-flushed cross-message state exists for the working
+  set's eviction to race against. Don't add batching without also adding eviction-pinning to
+  `AuctionWorkingSet` in the same change.
 
 ## JWT signing key provisioning
 

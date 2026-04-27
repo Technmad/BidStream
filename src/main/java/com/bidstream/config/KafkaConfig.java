@@ -69,13 +69,27 @@ public class KafkaConfig {
         return new DefaultKafkaConsumerFactory<>(props, new StringDeserializer(), new StringDeserializer());
     }
 
+    /**
+     * QA-REVIEW.md production-readiness finding: unlike {@link #kafkaListenerContainerFactory},
+     * this factory previously had no error handling at all, and every {@code notifier} listener
+     * caught its own exceptions and unconditionally acknowledged in a {@code finally} block - a
+     * malformed or unexpectedly-shaped record on any of these topics was silently dropped
+     * forever, never retried, never dead-lettered. Same bounded-retry-then-DLQ discipline as
+     * {@code auction.commands} now applies here (PDR §10.5); the destination is derived from the
+     * record's own topic so one factory serves all three notifier listeners.
+     */
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, String> stringValueKafkaListenerContainerFactory(
-            ConsumerFactory<String, String> stringValueConsumerFactory) {
+            ConsumerFactory<String, String> stringValueConsumerFactory,
+            KafkaTemplate<String, String> outboxKafkaTemplate) {
         ConcurrentKafkaListenerContainerFactory<String, String> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(stringValueConsumerFactory);
         factory.getContainerProperties().setAckMode(AckMode.MANUAL);
+
+        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(outboxKafkaTemplate,
+                (record, ex) -> new TopicPartition(record.topic() + ".DLQ", -1));
+        factory.setCommonErrorHandler(new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 3)));
         return factory;
     }
 

@@ -67,4 +67,38 @@ public class KafkaTopicConfig {
                 .config("retention.ms", String.valueOf(java.time.Duration.ofDays(14).toMillis()))
                 .build();
     }
+
+    /**
+     * QA-REVIEW.md production-readiness finding: the {@code notifier} group's listeners had no
+     * DLQ at all, unlike {@code auction.commands} - a malformed record on any of these three
+     * topics was silently dropped forever. {@code KafkaConfig}'s
+     * {@code stringValueKafkaListenerContainerFactory} now routes a permanently-failing record on
+     * {@code <topic>} to {@code <topic>.DLQ}, so each source topic needs its DLQ counterpart.
+     */
+    @Bean
+    public NewTopic bidsAcceptedDlqTopic() {
+        return TopicBuilder.name("bids.accepted.DLQ")
+                .partitions(3)
+                .replicas(1)
+                .config("retention.ms", String.valueOf(java.time.Duration.ofDays(14).toMillis()))
+                .build();
+    }
+
+    @Bean
+    public NewTopic bidsRejectedDlqTopic() {
+        return TopicBuilder.name("bids.rejected.DLQ")
+                .partitions(3)
+                .replicas(1)
+                .config("retention.ms", String.valueOf(java.time.Duration.ofDays(14).toMillis()))
+                .build();
+    }
+
+    @Bean
+    public NewTopic auctionsEventsDlqTopic() {
+        return TopicBuilder.name("auctions.events.DLQ")
+                .partitions(3)
+                .replicas(1)
+                .config("retention.ms", String.valueOf(java.time.Duration.ofDays(14).toMillis()))
+                .build();
+    }
 }
