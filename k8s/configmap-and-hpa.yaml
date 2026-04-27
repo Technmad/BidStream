@@ -9,6 +9,10 @@ data:
   SPRING_DATA_REDIS_HOST: bidstream-redis
   SPRING_DATA_REDIS_PORT: "6379"
   SPRING_KAFKA_BOOTSTRAP_SERVERS: bidstream-kafka:9092
+  # QA-REVIEW.md: defaults to 1 (single-broker local dev) in KafkaTopicConfig - MUST be raised
+  # to at least 3 here against a real multi-broker cluster, or min.insync.replicas=2 (PDR §4,
+  # derived from this value) can never actually be satisfied and the topic is misconfigured.
+  BIDSTREAM_KAFKA_TOPIC_REPLICATION_FACTOR: "3"
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
