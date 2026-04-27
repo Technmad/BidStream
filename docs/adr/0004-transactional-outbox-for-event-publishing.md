@@ -28,3 +28,8 @@ same row again on restart - downstream consumers must therefore be idempotent on
 - The outbox table grows unboundedly without a cleanup job; unlike `processed_events` (pruned by
   `PartitionMaintenanceScheduler`, PDR §8.3), outbox pruning was out of scope for this build and
   is a reasonable follow-up once row volume warrants it.
+
+**Update:** `PartitionMaintenanceScheduler` now also prunes `outbox` rows on the same nightly
+tick (`bidstream.outbox.retention-days`, default 7), via `OutboxJdbcRepository.pruneOlderThan`.
+Only rows with `published_at` already set are eligible — an unpublished row is still work the
+relay owes Kafka and is never deleted regardless of age.
