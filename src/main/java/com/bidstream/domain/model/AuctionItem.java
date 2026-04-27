@@ -57,6 +57,13 @@ public final class AuctionItem {
      * (or, in the Phase-1 synchronous path, inside one DB transaction guarded by {@code version}).
      */
     public BidOutcome placeBid(UUID bidderId, Money amount, Instant now) {
+        // This aggregate is the single invariant-enforcing boundary (PDR §7.4) - malformed input
+        // must come back as a clean rejection, not an NPE/IllegalArgumentException that skips
+        // every adapter's normal outcome handling.
+        if (bidderId == null || amount == null || now == null
+                || !amount.currency().equals(currentPrice.currency())) {
+            return BidOutcome.rejected(BidRejectReason.INVALID_BID);
+        }
         if (status != AuctionStatus.OPEN && status != AuctionStatus.EXTENDED) {
             return BidOutcome.rejected(BidRejectReason.AUCTION_NOT_OPEN);
         }
@@ -142,9 +149,7 @@ public final class AuctionItem {
 
         boolean reserveMet = reservePrice == null || currentPrice.isGreaterThanOrEqualTo(reservePrice);
         if (currentWinnerId != null && reserveMet) {
-            status = AuctionStatus.CLOSING;
-            AuctionStatus finalStatus = AuctionStatus.SOLD;
-            this.status = finalStatus;
+            status = AuctionStatus.SOLD;
             return new CloseOutcome.Sold(currentWinnerId, currentPrice);
         }
 

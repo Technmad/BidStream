@@ -102,6 +102,34 @@ class AuctionItemTest {
     }
 
     @Test
+    void nullBidderIdIsRejectedInsteadOfThrowing() {
+        BidOutcome outcome = auction.placeBid(null, Money.of("55.00", "USD"), NOW);
+
+        assertThat(outcome).isEqualTo(BidOutcome.rejected(BidRejectReason.INVALID_BID));
+    }
+
+    @Test
+    void nullAmountIsRejectedInsteadOfThrowing() {
+        BidOutcome outcome = auction.placeBid(bidderA, null, NOW);
+
+        assertThat(outcome).isEqualTo(BidOutcome.rejected(BidRejectReason.INVALID_BID));
+    }
+
+    @Test
+    void nullNowIsRejectedInsteadOfThrowing() {
+        BidOutcome outcome = auction.placeBid(bidderA, Money.of("55.00", "USD"), null);
+
+        assertThat(outcome).isEqualTo(BidOutcome.rejected(BidRejectReason.INVALID_BID));
+    }
+
+    @Test
+    void mismatchedCurrencyIsRejectedInsteadOfThrowing() {
+        BidOutcome outcome = auction.placeBid(bidderA, Money.of("55.00", "EUR"), NOW);
+
+        assertThat(outcome).isEqualTo(BidOutcome.rejected(BidRejectReason.INVALID_BID));
+    }
+
+    @Test
     void bidExactlyAtEndTimeIsRejectedAsAuctionEnded() {
         BidOutcome outcome = auction.placeBid(bidderA, Money.of("55.00", "USD"), auction.endTime());
 
@@ -132,6 +160,30 @@ class AuctionItemTest {
         assertThat(accepted.extended()).isTrue();
         assertThat(endingSoon.status()).isEqualTo(AuctionStatus.EXTENDED);
         assertThat(endingSoon.endTime()).isEqualTo(NOW.plusSeconds(31));
+    }
+
+    @Test
+    void applyResolvedBidAppliesAnAutoBidLadderOutcomeUnconditionally() {
+        // Unlike placeBid, this applies a price/winner already decided elsewhere (the auto-bid
+        // ladder) - it must accept an amount below currentPrice+minIncrement, since the ladder's
+        // own rules (not placeBid's floor) already validated it (PDR §12).
+        BidOutcome.Accepted outcome = auction.applyResolvedBid(bidderA, Money.of("52.00", "USD"), NOW);
+
+        assertThat(outcome.previousWinnerId()).isNull();
+        assertThat(outcome.newWinnerId()).isEqualTo(bidderA);
+        assertThat(auction.currentPrice()).isEqualTo(Money.of("52.00", "USD"));
+        assertThat(auction.currentWinnerId()).isEqualTo(bidderA);
+        assertThat(auction.version()).isEqualTo(1L);
+    }
+
+    @Test
+    void applyResolvedBidCanAlsoTriggerAnAntiSnipeExtension() {
+        AuctionItem endingSoon = openAuction(NOW.plusSeconds(10));
+
+        BidOutcome.Accepted outcome = endingSoon.applyResolvedBid(bidderA, Money.of("52.00", "USD"), NOW);
+
+        assertThat(outcome.extended()).isTrue();
+        assertThat(endingSoon.status()).isEqualTo(AuctionStatus.EXTENDED);
     }
 
     @Test
