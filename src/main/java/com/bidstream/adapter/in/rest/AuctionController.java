@@ -7,6 +7,9 @@ import com.bidstream.application.AuctionService;
 import com.bidstream.common.security.JwtAuthenticationFilter.AuthenticatedUser;
 import com.bidstream.domain.model.AuctionStatus;
 import com.bidstream.domain.model.Money;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.util.Currency;
 import java.util.UUID;
@@ -28,6 +31,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/v1/auctions")
+@Tag(name = "Auctions", description = "Create, browse, and manage auction listings")
 public class AuctionController {
 
     private static final Currency USD = Currency.getInstance("USD");
@@ -39,6 +43,8 @@ public class AuctionController {
     }
 
     @GetMapping
+    @SecurityRequirements
+    @Operation(summary = "Search auctions", description = "Public listing, optionally filtered by status and category.")
     public Page<AuctionResponse> list(
             @RequestParam(required = false) AuctionStatus status,
             @RequestParam(required = false) UUID category,
@@ -47,12 +53,15 @@ public class AuctionController {
     }
 
     @GetMapping("/{id}")
+    @SecurityRequirements
+    @Operation(summary = "Get an auction by ID")
     public AuctionResponse get(@PathVariable UUID id) {
         return AuctionResponse.from(auctionService.getById(id));
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
+    @Operation(summary = "Create an auction", description = "Requires ROLE_SELLER.")
     public AuctionResponse create(@AuthenticationPrincipal AuthenticatedUser user,
                                    @Valid @RequestBody CreateAuctionRequest request) {
         var auction = auctionService.create(
@@ -66,6 +75,7 @@ public class AuctionController {
     }
 
     @PatchMapping("/{id}")
+    @Operation(summary = "Update an auction", description = "Owner-only; title/description/schedule before it starts.")
     public AuctionResponse update(@AuthenticationPrincipal AuthenticatedUser user,
                                    @PathVariable UUID id,
                                    @RequestBody UpdateAuctionRequest request) {
@@ -75,6 +85,7 @@ public class AuctionController {
     }
 
     @PostMapping("/{id}/cancel")
+    @Operation(summary = "Cancel an auction", description = "Owner or ROLE_ADMIN only.")
     public ResponseEntity<Void> cancel(@AuthenticationPrincipal AuthenticatedUser user,
                                         @PathVariable UUID id) {
         boolean isAdmin = SecurityContextHolder.getContext().getAuthentication().getAuthorities()

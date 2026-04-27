@@ -1,7 +1,36 @@
 # BidStream — Real-Time Auction Platform
 
-Event-driven, horizontally-scalable real-time auction platform. See
+[![CI](https://github.com/Technmad/BidStream/actions/workflows/ci.yml/badge.svg)](.github/workflows/ci.yml)
+![Java](https://img.shields.io/badge/Java-21-orange)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3-brightgreen)
+![License](https://img.shields.io/badge/license-Unlicensed-lightgrey)
+
+Event-driven, horizontally-scalable real-time auction platform: users bid on live auctions with
+prices streamed to every connected client over WebSocket, proxy/auto-bidding on their behalf, and
+an anti-snipe rule that extends an auction's close whenever a bid lands in its final seconds. See
 [`PDR-RealTimeAuctionPlatform.md`](./PDR-RealTimeAuctionPlatform.md) for the full design.
+
+## Architecture at a glance
+
+```
+                 ┌────────────┐   POST /bids (202, edge-ack < 20ms p99)
+  REST clients ─▶│  REST API  │──────────────┐
+                 └────────────┘              ▼
+                                        ┌───────────┐   single writer per     ┌────────────┐
+  WS clients   ◀──── price/outcome ─────│   Kafka    │──  partition, ordered ▶│  Postgres  │
+  (/topic/...)      pushes (async)      │  commands  │      commands          │ (source of │
+                                        └───────────┘                        │   truth)   │
+                                              │                               └────────────┘
+                                              ▼
+                                        ┌───────────┐
+                                        │   Redis    │  rebuildable projections:
+                                        │ (cache)    │  price, leaderboard, rate-limit, idempotency
+                                        └───────────┘
+```
+
+A bid is durable in Kafka before the client ever gets a response; the single writer per auction
+partition — not client-side timing — decides every outcome (PDR §11.3). See
+[`docs/README.md`](docs/README.md) for the full documentation index (ADRs, runbook, API).
 
 ## Stack
 
@@ -14,10 +43,14 @@ Java 21 (LTS) · Spring Boot 3 · Apache Kafka (KRaft) · PostgreSQL 16 · Redis
 
 # bring up Postgres, Redis, Kafka (KRaft), Kafka UI, Prometheus, Grafana
 docker compose -f docker/docker-compose.yml up -d
+
+./gradlew bootRun
 ```
 
 | Service | URL |
 |---|---|
+| API | http://localhost:8080/api/v1 |
+| API docs (Swagger UI) | http://localhost:8080/swagger-ui.html |
 | Postgres | `localhost:5433` (db/user/pass: `bidstream`) |
 | Redis | `localhost:6379` |
 | Kafka | `localhost:9092` |

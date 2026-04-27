@@ -12,6 +12,10 @@ import com.bidstream.common.ConflictException;
 import com.bidstream.common.security.JwtAuthenticationFilter.AuthenticatedUser;
 import com.bidstream.domain.model.BidOutcome;
 import com.bidstream.domain.port.BidRepository;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.time.Duration;
 import java.util.UUID;
@@ -41,6 +45,7 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api/v1/auctions/{auctionId}/bids")
+@Tag(name = "Bids", description = "Place bids and read bid history for an auction")
 public class BidController {
 
     private static final Duration SYNC_WAIT_TIMEOUT = Duration.ofSeconds(5);
@@ -62,13 +67,20 @@ public class BidController {
     }
 
     @GetMapping
+    @SecurityRequirements
+    @Operation(summary = "List bid history for an auction")
     public Page<BidHistoryEntry> history(@PathVariable UUID auctionId, Pageable pageable) {
         return bidHistoryService.forAuction(auctionId, pageable).map(BidHistoryEntry::from);
     }
 
     @PostMapping
+    @Operation(summary = "Place a bid",
+            description = "Returns 202 Accepted immediately by default (edge-ack SLO p99 < 20ms); "
+                    + "the authoritative accepted/rejected decision arrives over WebSocket correlated "
+                    + "by correlationId. Pass ?wait=true to opt into a short-lived (5s) synchronous wait.")
     public ResponseEntity<?> placeBid(@AuthenticationPrincipal AuthenticatedUser user,
                                        @PathVariable UUID auctionId,
+                                       @Parameter(description = "Client-generated key that dedupes retried bid submissions")
                                        @RequestHeader("Idempotency-Key") String idempotencyKey,
                                        @RequestParam(defaultValue = "false") boolean wait,
                                        @Valid @RequestBody PlaceBidRequest request) {

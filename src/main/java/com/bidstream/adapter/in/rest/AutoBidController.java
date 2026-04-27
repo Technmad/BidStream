@@ -5,6 +5,8 @@ import com.bidstream.adapter.in.rest.dto.AutoBidDtos.SetAutoBidRequest;
 import com.bidstream.application.AutoBidService;
 import com.bidstream.common.security.JwtAuthenticationFilter.AuthenticatedUser;
 import com.bidstream.domain.model.Money;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.util.Currency;
 import java.util.UUID;
@@ -19,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/v1/auctions/{auctionId}/auto-bid")
+@Tag(name = "Auto-Bid", description = "Set or cancel proxy (auto-)bidding for an auction")
 public class AutoBidController {
 
     private static final Currency USD = Currency.getInstance("USD");
@@ -30,6 +33,8 @@ public class AutoBidController {
     }
 
     @PostMapping
+    @Operation(summary = "Set (or replace) an auto-bid", description = "The system bids on the "
+            + "user's behalf up to maxAmount as competing bids come in.")
     public AutoBidResponse set(@AuthenticationPrincipal AuthenticatedUser user,
                                 @PathVariable UUID auctionId,
                                 @Valid @RequestBody SetAutoBidRequest request) {
@@ -38,6 +43,7 @@ public class AutoBidController {
     }
 
     @DeleteMapping
+    @Operation(summary = "Cancel the caller's auto-bid for this auction")
     public ResponseEntity<Void> cancel(@AuthenticationPrincipal AuthenticatedUser user,
                                         @PathVariable UUID auctionId) {
         autoBidService.cancelAutoBid(auctionId, user.id());
