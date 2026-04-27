@@ -20,6 +20,7 @@ import com.bidstream.domain.model.CloseOutcome;
 import com.bidstream.domain.model.Money;
 import com.bidstream.domain.port.AuctionRepository;
 import com.bidstream.domain.port.AutoBidRepository;
+import com.bidstream.domain.port.PriceCache;
 import com.bidstream.domain.service.AutoBidResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Counter;
@@ -62,6 +63,7 @@ public class AuctionCommandProcessor {
     private final AcceptedBidPersister acceptedBidPersister;
     private final SettlementJdbcRepository settlementRepository;
     private final BidIdempotencyKeyJdbcRepository idempotencyKeyRepository;
+    private final PriceCache priceCache;
     private final ObjectMapper objectMapper;
     private final Counter bidsAcceptedCounter;
     private final Counter replaysCounter;
@@ -75,6 +77,7 @@ public class AuctionCommandProcessor {
                                     AcceptedBidPersister acceptedBidPersister,
                                     SettlementJdbcRepository settlementRepository,
                                     BidIdempotencyKeyJdbcRepository idempotencyKeyRepository,
+                                    PriceCache priceCache,
                                     ObjectMapper objectMapper, MeterRegistry meterRegistry) {
         this.workingSet = workingSet;
         this.auctionRepository = auctionRepository;
@@ -84,6 +87,7 @@ public class AuctionCommandProcessor {
         this.acceptedBidPersister = acceptedBidPersister;
         this.settlementRepository = settlementRepository;
         this.idempotencyKeyRepository = idempotencyKeyRepository;
+        this.priceCache = priceCache;
         this.objectMapper = objectMapper;
         this.meterRegistry = meterRegistry;
         // PDR §18: bid accept/reject rate, replay/dedup hit rate, decision latency.
@@ -103,6 +107,7 @@ public class AuctionCommandProcessor {
         if (alreadyProcessed.isPresent()) {
             log.info("Replaying stored outcome for eventId={} (already processed)", cmd.eventId());
             replaysCounter.increment();
+            reassertRedisProjection(cmd.auctionId(), alreadyProcessed.get());
             return null;
         }
 
@@ -185,9 +190,11 @@ public class AuctionCommandProcessor {
      */
     @Transactional
     public void processClose(CloseCommand cmd) {
-        if (processedEventRepository.findById(cmd.eventId()).isPresent()) {
+        Optional<ProcessedEventRecord> alreadyProcessed = processedEventRepository.findById(cmd.eventId());
+        if (alreadyProcessed.isPresent()) {
             log.info("Replaying stored outcome for CLOSE eventId={} (already processed)", cmd.eventId());
             replaysCounter.increment();
+            reassertRedisProjection(cmd.auctionId(), alreadyProcessed.get());
             return;
         }
 
@@ -302,6 +309,26 @@ public class AuctionCommandProcessor {
     private AuctionItem seedFromCommittedPostgres(UUID auctionId) {
         return auctionRepository.findById(auctionId)
                 .orElseThrow(() -> new NotFoundException("Auction not found: " + auctionId));
+    }
+
+    /**
+     * QA-REVIEW.md Medium: a redelivered, already-processed event used to just log and stop,
+     * contradicting its own "replaying stored outcome" line and PDR §19's "replay re-asserts the
+     * Redis projection." If Redis lost the price key between the original write and this
+     * redelivery (a restart, an eviction, a failover to an empty replica), that left the correct
+     * answer sitting in Postgres with nothing pushing it back to Redis until the next genuinely
+     * new bid. A rejected outcome changed nothing, so there's nothing to re-assert; an accepted
+     * bid or a close outcome re-derives straight from committed Postgres rather than trusting the
+     * narrower fields stored on the {@code processed_events} row.
+     */
+    private void reassertRedisProjection(UUID auctionId, ProcessedEventRecord record) {
+        if ("REJECTED".equals(record.outcome())) {
+            return;
+        }
+        auctionRepository.findById(auctionId).ifPresent(auction -> {
+            priceCache.setCurrent(auctionId, auction.currentPrice(), auction.currentWinnerId(), auction.endTime());
+            priceCache.markDirty(auctionId);
+        });
     }
 
     private void writeOutboxEvent(UUID auctionId, String topic, Object event) {
