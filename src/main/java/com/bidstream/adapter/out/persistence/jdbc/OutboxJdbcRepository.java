@@ -49,6 +49,17 @@ public class OutboxJdbcRepository {
         jdbcTemplate.update("UPDATE outbox SET published_at = now() WHERE id = ?", id);
     }
 
+    /**
+     * ADR-0004 flagged this as unimplemented: without it {@code outbox} grows unboundedly. Only
+     * rows already confirmed published are eligible - an unpublished row, no matter how old,
+     * is still work the relay owes Kafka and must never be deleted out from under it.
+     */
+    public int pruneOlderThan(int retentionDays) {
+        return jdbcTemplate.update(
+                "DELETE FROM outbox WHERE published_at IS NOT NULL AND published_at < now() - (? || ' days')::interval",
+                retentionDays);
+    }
+
     public record OutboxRow(long id, String topic, String partitionKey, String payload) {
     }
 }
