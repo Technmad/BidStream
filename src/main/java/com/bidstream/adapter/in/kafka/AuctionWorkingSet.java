@@ -19,6 +19,15 @@ import org.springframework.stereotype.Component;
  * <p>Capacity is bounded so a long-running processor doesn't accumulate unbounded auction state;
  * an evicted (or never-seeded) entry is transparently reloaded from committed Postgres on next
  * touch, which is exactly what makes eviction safe.
+ *
+ * <p><b>QA-REVIEW.md Low:</b> that eviction safety currently relies on every entry always being
+ * fully flushed to Postgres before this map could ever evict it - true today because
+ * {@link com.bidstream.application.AuctionCommandProcessor} commits each command's write in its
+ * own transaction with no cross-message buffering. §9.6's per-partition batch flush (buffering
+ * several commands' writes before committing) is a deliberately deferred optimization, not yet
+ * implemented - and the moment it is, this LRU needs eviction-pinning for any entry with
+ * un-flushed deltas, or a batch flush racing an eviction could silently lose writes. Don't add
+ * batching here without adding that pinning in the same change.
  */
 @Component
 public class AuctionWorkingSet {
