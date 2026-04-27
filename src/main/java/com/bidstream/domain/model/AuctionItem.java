@@ -112,7 +112,14 @@ public final class AuctionItem {
         if (now.isBefore(snipeWindowStart)) {
             return false;
         }
-        endTime = now.plusSeconds(antiSnipeSeconds);
+        Instant newEndTime = now.plusSeconds(antiSnipeSeconds);
+        if (!newEndTime.isAfter(endTime)) {
+            // Exactly at the window boundary (now == endTime - antiSnipeSeconds), the extension
+            // formula lands on the exact same instant - a cosmetic-only status flip with nothing
+            // to actually push to a watching client, so it isn't an extension at all.
+            return false;
+        }
+        endTime = newEndTime;
         status = AuctionStatus.EXTENDED;
         return true;
     }

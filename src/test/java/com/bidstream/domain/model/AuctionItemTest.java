@@ -102,6 +102,39 @@ class AuctionItemTest {
     }
 
     @Test
+    void bidExactlyAtEndTimeIsRejectedAsAuctionEnded() {
+        BidOutcome outcome = auction.placeBid(bidderA, Money.of("55.00", "USD"), auction.endTime());
+
+        assertThat(outcome).isEqualTo(BidOutcome.rejected(BidRejectReason.AUCTION_ENDED));
+    }
+
+    @Test
+    void bidExactlyAtTheAntiSnipeWindowBoundaryIsANoOp() {
+        // antiSnipeSeconds is 30 (openAuction's default) and endTime is NOW+30, so
+        // snipeWindowStart == NOW exactly - the formula's new end time equals the existing one.
+        AuctionItem endingSoon = openAuction(NOW.plusSeconds(30));
+
+        BidOutcome outcome = endingSoon.placeBid(bidderA, Money.of("55.00", "USD"), NOW);
+
+        BidOutcome.Accepted accepted = (BidOutcome.Accepted) outcome;
+        assertThat(accepted.extended()).isFalse();
+        assertThat(endingSoon.status()).isEqualTo(AuctionStatus.OPEN);
+        assertThat(endingSoon.endTime()).isEqualTo(NOW.plusSeconds(30));
+    }
+
+    @Test
+    void bidOneInstantPastTheAntiSnipeBoundaryDoesExtend() {
+        AuctionItem endingSoon = openAuction(NOW.plusSeconds(30));
+
+        BidOutcome outcome = endingSoon.placeBid(bidderA, Money.of("55.00", "USD"), NOW.plusSeconds(1));
+
+        BidOutcome.Accepted accepted = (BidOutcome.Accepted) outcome;
+        assertThat(accepted.extended()).isTrue();
+        assertThat(endingSoon.status()).isEqualTo(AuctionStatus.EXTENDED);
+        assertThat(endingSoon.endTime()).isEqualTo(NOW.plusSeconds(31));
+    }
+
+    @Test
     void newHighestBidderOutbidsThePreviousOne() {
         auction.placeBid(bidderA, Money.of("55.00", "USD"), NOW);
 
