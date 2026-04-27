@@ -191,11 +191,11 @@ class AuctionLifecycleBroadcastIT {
                 given().get("/api/v1/auctions/" + auctionId).then().extract().path("endTime"));
         eventPublisher.publish("auction.commands", auctionId, CloseCommand.of(auctionUuid, scheduledEnd));
 
-        @SuppressWarnings("unchecked")
-        var message = (Map<String, Object>) received.poll(15, TimeUnit.SECONDS);
+        // Same race as the AUCTION_EXTENDED test above - the ticker's own PRICE_UPDATE messages
+        // share this topic, so skip those to find the one-time AUCTION_ENDED broadcast.
+        Map<String, Object> message = pollForType(received, "AUCTION_ENDED");
 
         assertThat(message).isNotNull();
-        assertThat(message.get("type")).isEqualTo("AUCTION_ENDED");
         assertThat(message.get("auctionId")).isEqualTo(auctionId);
         assertThat(message.get("outcome")).isEqualTo("SOLD");
         assertThat(message.get("winnerId")).isEqualTo(bidderId.toString());
