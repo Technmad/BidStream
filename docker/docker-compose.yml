@@ -7,7 +7,10 @@ services:
     environment:
       POSTGRES_DB: bidstream
       POSTGRES_USER: bidstream
-      POSTGRES_PASSWORD: bidstream
+      # QA-REVIEW.md Low: override via a local, untracked docker/.env (POSTGRES_PASSWORD=...) if
+      # even a well-known local-dev placeholder shouldn't sit in source control on your machine -
+      # this default only ever reaches a container bound to localhost, never a shared environment.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bidstream}
     ports:
       - "5433:5432"
     volumes:
@@ -81,7 +84,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      # Same hygiene note as postgres's POSTGRES_PASSWORD above - override via docker/.env.
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
     volumes:
       - bidstream-grafana-data:/var/lib/grafana
 

@@ -1,12 +1,16 @@
 package com.bidstream.common.security;
 
 import com.bidstream.adapter.out.cache.RedisRateLimiter;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Duration;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 import org.springframework.lang.NonNull;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -26,9 +30,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static final Duration BID_WINDOW = Duration.ofSeconds(10);
 
     private final RedisRateLimiter rateLimiter;
+    private final ObjectMapper objectMapper;
 
-    public RateLimitFilter(RedisRateLimiter rateLimiter) {
+    public RateLimitFilter(RedisRateLimiter rateLimiter, ObjectMapper objectMapper) {
         this.rateLimiter = rateLimiter;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -54,9 +60,16 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
 
         if (limited) {
-            response.setStatus(429);
-            response.setContentType("application/json");
-            response.getWriter().write("{\"error\":\"RATE_LIMITED\"}");
+            // QA-REVIEW.md Low: this used to write its own ad-hoc {"error":"RATE_LIMITED"} body,
+            // the only rejection path in the app not shaped like GlobalExceptionHandler's RFC
+            // 7807 responses - a filter runs outside Spring MVC's exception handling, so it can't
+            // reuse that @ExceptionHandler, but it can match the same wire shape by hand.
+            ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.TOO_MANY_REQUESTS,
+                    "Rate limit exceeded");
+            problem.setProperty("reason", "RATE_LIMITED");
+            response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
+            response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
+            objectMapper.writeValue(response.getWriter(), problem);
             return;
         }
 
