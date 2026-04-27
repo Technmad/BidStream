@@ -19,6 +19,12 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      # Belt-and-suspenders: the executable bit is now committed correctly (git update-index
+      # --chmod=+x gradlew), but this guards against it ever silently regressing again - e.g. a
+      # checkout method or a future commit from a filesystem that doesn't preserve the bit.
+      - name: Ensure gradlew is executable
+        run: chmod +x ./gradlew
+
       # Same local stack every developer already runs (docker/docker-compose.yml) - the
       # integration tests connect to real Postgres/Kafka/Redis rather than Testcontainers
       # (see docs/adr/0003), so CI just needs to bring that stack up first. Only the three
