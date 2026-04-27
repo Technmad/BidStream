@@ -4,8 +4,8 @@
 |---|---|
 | **Project name** | BidStream — Real-Time Auction Platform |
 | **Document type** | Project Design Requirements / Technical Design Document |
-| **Version** | 1.3 |
-| **Status** | Draft for build |
+| **Version** | 1.4 |
+| **Status** | Draft for build — API surface extended to close v1.3's audited gaps |
 | **Target stack** | Java 21 (LTS), Spring Boot 3.x, Apache Kafka, PostgreSQL, Redis, Docker |
 | **Deployment target** | Docker Compose (local/dev), Kubernetes-ready (production) |
 
@@ -19,6 +19,7 @@
 | 1.1 | **Architectural corrections.** (1) Reconciled source of truth — this is event-*driven*, not event-*sourced*; Postgres is the system of record, Kafka is the durable ingestion log + result-event stream. (2) Split the bid-latency NFR into *edge-ack* vs *decision* latency; bids are async (202 + WebSocket result), never a synchronous reply over Kafka. (3) Auction close is now a **command routed onto the auction's own partition**, ordered against every bid by the single per-auction consumer (kills clock-skew / double-close). (4) Made the single-hot-auction throughput ceiling explicit and dropped the unmeasured 5k/sec headline. (5) Bid processor is **stateless per message** — it reloads current state each time, so partition reassignment needs no in-memory rebuild. |
 | 1.2 | **Operational hardening for load.** (6) **Tick-based broadcaster** — price fan-out decoupled from bid rate; a per-node ticker reads Redis every ~250ms and broadcasts the latest. (7) **Write-behind DB batching** with the strict rule that Kafka offsets commit *only after* the batch is durably flushed to Postgres. (8) **Server-authoritative time** — client clocks are cosmetic; countdowns run against a server clock-offset estimate. (9) Idempotency-key TTL clarified (Redis fast path vs durable unique constraint). (10) Bid history **time-partitioned** for archival. |
 | 1.3 | **Failover correctness — the handoff, mechanized.** The v1.2 "stateless per message → replay is free" claim was unsafe. Five coupled defects fixed: (a) dedup was decided by *auction state* (`ALREADY_HIGHEST`) not *event identity*, so a replayed accepted bid could be re-emitted as REJECTED — now gated by an **`event_id`** ledger; (b) the bid unique key included `created_at DEFAULT now()`, so a replay got a fresh timestamp and slipped through — `created_at` now carries the command's **`occurredAt`**, making the guard replay-stable; (c) decisions read Redis, which can be **ahead of Postgres** after a crash → phantom price — the processor now decides from a **working set seeded from committed Postgres**, never Redis; (d) once (b) works, a replayed batch would abort the flush on conflict — all durable inserts are now **`ON CONFLICT DO NOTHING`**; (e) the decision event was produced *after* the transaction and could be lost — it is now an **outbox row inside the flush transaction**. Plus **per-partition** buffers/offsets, and the "stateless per message" language retired in favour of **"bounded, replayable working set."** Two tightenings added beyond the review: working-set entries with un-flushed deltas are **pinned against eviction**, and the ledger dedup DB check is **bounded to the post-rebalance replay window**. |
+| 1.4 | **API-surface completeness — the thin parts, specified.** §9/§10/§19 were audited and revised three times over; §14's plain CRUD surface never was, and a strict PDR-vs-built review surfaced the cost: `GET /me/watching` (§14.1) named an endpoint with no domain model, no schema, and no way to ever start "watching" anything behind it; FR-3's "search" was never carried into an API param or a data-model decision; the `categories` table (§8) had no endpoint reading it at all. Fixed by extending the spec, not by letting the build quietly improvise past it: (1) a new **`Watch`** entity + `watches` table (§7.1, §8.4) makes `GET /me/watching` buildable, modeled explicitly as a **durable bookmark decoupled from live WebSocket delivery** (§14.4) so the two are never conflated; (2) a new **`Category`** entity + `GET /categories` (§7.1, §14.4), admin-curated rather than seller-created, so the taxonomy `categoryId` already assumed can actually be discovered; (3) **basic search** (§8.4, §14.4) specified as Postgres `tsvector` + GIN full-text *filtering* — deliberately not ranking, staying inside the boundary §2.2 already drew around relevance engines. None of the three touch §9's concurrency machinery — each is a plain CRUD/read path outside the single-writer Kafka pipeline, and §14.4 states why explicitly rather than leaving it for the next reader to wonder about. (4) Gating category creation on `ROLE_ADMIN` surfaced the same class of gap one level down — the role was named in §17's AuthZ table since the original PDR with no account ever able to hold it. §17.1 closes that with a configured bootstrap-username mechanism, the same shape as JWT key provisioning. |
 
 ### The coherent operational story (read this first)
 
@@ -61,7 +62,7 @@ This PDR specifies the full system: requirements, architecture, domain model, da
 
 - Payment processing / real money movement (settlement is modeled but stubbed; integrate a PSP later).
 - Full identity/KYC, disputes, or escrow flows.
-- Recommendation/search relevance engines (basic listing/filtering only).
+- Recommendation/search relevance engines (basic listing/filtering only — §14.4 specifies exactly where that line sits: keyword *filtering* via Postgres full-text search, no relevance ranking, no typo tolerance beyond what `tsvector` gives for free).
 - Mobile native apps (the platform is API + WebSocket first; clients are out of scope).
 - Multi-region active-active replication (single-region HA is the v1 target).
 
@@ -73,7 +74,7 @@ This PDR specifies the full system: requirements, architecture, domain model, da
 |---|---|
 | FR-1 | Users can register, authenticate, and manage a profile. |
 | FR-2 | Sellers can create an auction item with title, description, category, starting price, optional reserve price, start time, and end time. |
-| FR-3 | Buyers can browse/list/filter/search auctions and view a single auction with live current price. |
+| FR-3 | Buyers can browse/list/filter/search auctions (basic keyword search, §14.4) and view a single auction with live current price. |
 | FR-4 | Buyers can place a bid on an OPEN auction. A valid bid must exceed `current_price + min_increment` and not be placed by the current highest bidder. |
 | FR-5 | Buyers can set an auto-bid (proxy) maximum; the system automatically raises their bid up to that maximum to keep them the highest bidder. |
 | FR-6 | All watchers of an auction receive real-time updates (new price, new high bidder, outbid notices, time-extended, auction-ended). |
@@ -83,6 +84,7 @@ This PDR specifies the full system: requirements, architecture, domain model, da
 | FR-10 | Full, immutable bid history per auction is queryable. |
 | FR-11 | Users cannot bid on their own auctions. |
 | FR-12 | Idempotent bid submission: a client retry with the same idempotency key must not create a duplicate bid. |
+| FR-13 | Buyers can watch/unwatch an auction; a persisted watchlist (`GET /me/watching`) survives across sessions and devices, independent of any live WebSocket subscription (§7.1, §8.4, §14.4). |
 
 ---
 
@@ -231,6 +233,17 @@ AutoBid / ProxyBid (entity)
  ├─ maxAmount: Money
  ├─ active: boolean
  └─ createdAt: Instant
+
+Watch (entity)  ── a durable bookmark, not a live-delivery mechanism (§14.4)
+ ├─ userId: UUID
+ ├─ auctionId: UUID
+ └─ createdAt: Instant
+
+Category (entity)  ── a curated, admin-managed taxonomy (§14.4); not part of the Auction
+ │                     aggregate — an AuctionItem merely references categoryId
+ ├─ id: UUID
+ ├─ name: String
+ └─ slug: String
 ```
 
 ### 7.2 Enumerations
@@ -440,6 +453,52 @@ CREATE INDEX idx_processed_events_occurred ON processed_events(occurred_at);
 - **The v1.2 month-boundary retry worry disappears.** A replay carries the original `occurred_at`, so it always targets the *same* partition the original insert did — there is no "straddling" case.
 - **Detach age must exceed Kafka retention.** `auction.commands` is retained 7 days (§10.1), so a command can only replay within that window. Detaching partitions on a monthly horizon (≫ 7 days) guarantees any replayed command's `occurred_at` still lands in a **live** partition, so the idempotent re-insert never fails for want of a partition.
 - **`processed_events` is pruned, not partitioned.** A scheduled `DELETE FROM processed_events WHERE occurred_at < now() - INTERVAL '8 days'` (comfortably past Kafka's 7-day retention) keeps it bounded to roughly one retention window regardless of total bid volume: beyond that horizon a command can no longer be replayed, so its ledger row has no dedup value. PK lookups on `event_id` stay O(1); pruning is a cheap indexed range delete.
+
+### 8.4 Schema additions for the previously-thin API surface (v1.4)
+
+These back the endpoints in §14.4. **None of them participate in the bid-processing replay path
+(§9.6), so none of them are subject to the "no `DEFAULT now()` in a dedup key" rule** — that rule
+exists specifically because Kafka can redeliver a *bid* command and the guard has to survive that
+replay identically each time. Nothing here is ever replayed off a Kafka log; an ordinary
+`DEFAULT now()` is exactly right for all of it.
+
+```sql
+-- WATCHES — a durable bookmark. Idempotent by construction: watching twice writes the same row
+-- (PK conflict → ON CONFLICT DO NOTHING), unwatching something never-watched deletes zero rows.
+-- Neither is an error (§14.4) — both are legitimate outcomes of a client that doesn't track
+-- local watch-state precisely and just calls the endpoint to be sure.
+CREATE TABLE watches (
+    user_id     UUID NOT NULL REFERENCES users(id),
+    auction_id  UUID NOT NULL REFERENCES auctions(id),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, auction_id)
+);
+CREATE INDEX idx_watches_auction ON watches(auction_id);
+
+-- CATEGORIES already exist (§8, migration V1) as a bare id/name/slug table. No schema change
+-- needed here — the gap was purely that §14.1 never specified an endpoint reading it (§14.4 adds
+-- one).
+
+-- BASIC SEARCH — Postgres full-text search, GENERATED so it can never drift from title/description
+-- (no separate write path to keep in sync, no reindex job).
+ALTER TABLE auctions ADD COLUMN search_vector tsvector
+    GENERATED ALWAYS AS (
+        to_tsvector('english', coalesce(title, '') || ' ' || coalesce(description, ''))
+    ) STORED;
+CREATE INDEX idx_auctions_search ON auctions USING GIN (search_vector);
+```
+
+**Why `tsvector` + GIN, not `LIKE '%term%'`.** A leading-wildcard `LIKE`/`ILIKE` cannot use a
+standard B-tree index — every search becomes a full sequential scan the moment the catalog grows
+past a trivial size, which is exactly the kind of query that looks fine in a demo and falls over
+in production. `tsvector` + GIN gives real indexed lookup for the basic keyword filter FR-3 asks
+for, without building the relevance-ranking machinery §2.2 explicitly excludes: there is no
+`ts_rank`, no boosting, no synonym handling here — just "does this row's title/description contain
+the query's words," filtered, not scored. **If a future need calls for typo-tolerant substring
+matching** (a user typing "auciton"), `pg_trgm` + a trigram GIN index is the documented upgrade
+path — deliberately not built now, because FR-3 never asked for it and nothing in this codebase's
+own testing has demonstrated a need for it yet (the same "quote only measured numbers, don't build
+ahead of evidence" discipline §20/§22 already apply to throughput applies here to query capability).
 
 ---
 
@@ -818,6 +877,58 @@ The API returns **202 Accepted** because bids are processed asynchronously throu
 - Validation: bean validation on DTOs; reject unknown currencies, negative amounts.
 - Versioning: URI-versioned (`/v1`); additive changes preferred.
 
+### 14.4 API additions for the previously-thin surface (v1.4)
+
+§14.1 named `GET /me/watching` without ever specifying how a user starts watching something, and
+FR-3's "search" and the `categories` table (§8) never got an endpoint at all. **None of the three
+below touch §9's concurrency core** — they're plain CRUD/read paths against Postgres, entirely
+outside the single-writer Kafka pipeline, because none of them mutate auction state or need
+per-auction ordering. That's not an omission; it's stated here explicitly so it doesn't have to be
+inferred.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/categories` | – | List all categories (`id`, `name`, `slug`). |
+| POST | `/categories` | admin | Create a category (`ROLE_ADMIN`, matching §17's RBAC pattern for `ROLE_SELLER` on auction creation). |
+| POST | `/auctions/{id}/watch` | user | Start watching. Idempotent — watching twice is a no-op, not a duplicate or an error. |
+| DELETE | `/auctions/{id}/watch` | user | Stop watching. Idempotent — unwatching something never watched is a no-op, not a `404`. |
+| GET | `/me/watching` | user | Paginated list of the caller's watched auctions (all statuses, ordered by `end_time`), now backed by the `watches` table (§8.4). |
+| GET | `/auctions?q=...` | – | Adds a `q` param to the existing listing endpoint (§14.1): basic keyword filter over title + description via `search_vector` (§8.4). Composes with the existing `status`/`category` filters (`AND`); results are *filtered*, not relevance-ranked (§2.2). |
+
+**Watching is a bookmark, not a subscription — stated explicitly so it never has to be inferred.**
+`POST .../watch` writes one row to `watches`. It does **not** subscribe the caller to
+`/topic/auctions/{id}` and has no effect on what WebSocket messages they receive — that remains
+purely a client-side STOMP subscription decision (§15.1), entirely unrelated to this table. The
+two are deliberately decoupled:
+
+- `watches` is what makes "the auctions I care about" survive a reload with no live connection —
+  a durable, cross-device bookmark.
+- The WebSocket subscription is what makes an *open* client tab live — ephemeral, connection-scoped,
+  and unaffected by whether a `watches` row exists.
+
+A client that wants both persisted recall *and* live updates does both things: call
+`POST .../watch` once (or never, if it only cares about the live view while open), and separately
+subscribe to `/topic/auctions/{id}` for as long as the tab is open, exactly as it would for any
+other auction it's merely looking at. Neither implies the other.
+
+**Why watching didn't need any of §9's machinery.** A watch write only ever touches the calling
+user's own row (`PRIMARY KEY (user_id, auction_id)`) — there is no cross-user contention to
+serialize, no price/winner state to protect, and the write is never replayed off a Kafka log. It's
+an ordinary transactional insert/delete against Postgres, not a command on `auction.commands`, and
+giving it Kafka machinery it doesn't need would be exactly the kind of over-engineering this PDR
+argues against elsewhere (§9.6's own "100 tiny inserts/sec... is trivial for Postgres" reasoning
+applies here even more directly, since watch writes don't even share a hot row with anything else).
+
+**Category creation is intentionally admin-only, not seller-facing.** Letting any seller mint a new
+category the moment they don't see one they like is exactly how a taxonomy fragments into
+near-duplicates ("Electronics" / "electronics" / "Electronic Items"), which then breaks the very
+filtering `categoryId` exists to support. Sellers pick from what `GET /categories` returns; only
+`ROLE_ADMIN` can extend that list. This mirrors the reasoning already applied to `ROLE_SELLER`
+gating auction creation (§17) — a role check exists wherever letting anyone act would corrode a
+shared resource, not just wherever data would otherwise be lost. See §17.1 for how an account
+actually gets `ROLE_ADMIN` in the first place — naming the role here without that would repeat the
+exact "endpoint with no way to reach it" gap this whole revision exists to close.
+
 ---
 
 ## 15. WebSocket / Real-Time Design
@@ -958,6 +1069,34 @@ The invariants now visible: **decisions read committed Postgres, not Redis** (no
 | Audit | Immutable `bids` log + `auctions.events` provide a full, tamper-evident trail. |
 | OWASP | Address Top 10: broken access control, injection, SSRF on any outbound calls, security misconfig, etc. |
 
+### 17.1 `ROLE_ADMIN` provisioning (v1.4)
+
+The AuthZ row above has named `ROLE_ADMIN` since the original PDR, but no version before v1.4 ever
+specified how an account gets it — `register()` only ever grants `ROLE_USER`/`ROLE_SELLER`
+(§14.4's "every registered user can both buy and sell" reasoning). That silence was harmless while
+nothing was actually gated on `ROLE_ADMIN` at the API layer; v1.4's `POST /categories` (§14.4)
+changes that, so the gap has to be closed here rather than rediscovered as an "unreachable
+endpoint" the way `GET /me/watching` was.
+
+**Mechanism — a configured bootstrap username, the same shape as JWT key provisioning (§17,
+`JwtKeyConfig`).** `bidstream.admin.bootstrap-username` (unset by default) names exactly one
+username that, if and when it registers, is granted `ROLE_ADMIN` in addition to the usual two
+roles — a one-time, config-driven promotion, not a standing backdoor: the check only fires inside
+`register()`, so it has no effect on an account that already exists, and registration's own
+unique-username constraint means at most one account can ever claim it. Unset (the default), no
+account can ever be granted `ROLE_ADMIN` through this path — matching `JwtKeyConfig`'s own
+"absent means the safe/inert default, not a silently-privileged one" posture. Production sets it
+via the same Secret that carries the JWT key pair (`k8s/secret.example.yaml`); local dev leaves it
+unset unless someone specifically needs to test `POST /categories`.
+
+**Once that first admin exists, promoting anyone else is that admin's job, not this
+mechanism's.** `bidstream.admin.bootstrap-username` only ever answers "how does the *first* admin
+get created when none exist" — a `PATCH /users/{id}/roles` (admin-only, ownership-checked like
+every other admin action in §14.4) is the natural next endpoint for ongoing role management, but
+is out of scope for v1.4: nothing today needs more than one admin, and adding that endpoint ahead
+of a real need would be exactly the kind of unscoped build-ahead this PDR argues against
+elsewhere (§20, §22).
+
 ---
 
 ## 18. Observability
@@ -1059,6 +1198,7 @@ bidstream/
 
 1. A deterministic concurrency test proving 1,000 simultaneous bids on one auction yield exactly one winner and a gap-free, fully-ordered accepted-bid history.
 2. A **failover/replay test** that kills the processor mid-batch and asserts, after reassignment, that (a) no committed bid is lost, (b) no already-accepted bid is re-emitted as rejected, (c) `bids` contains no duplicate for the replayed commands, and (d) the final Redis price equals the committed Postgres price. Run it for **both** crash windows: *before* the flush, and *after the flush but before the offset commit.*
+3. **v1.4 additions (§14.4):** watching and unwatching are each idempotent — calling either endpoint twice in a row produces no duplicate row, no error, and no change in behavior on the second call; a basic search query (`?q=...`) matches on both title *and* description, excludes rows matching neither, and composes correctly with an already-applied `status`/`category` filter (`AND`, not `OR`); category creation is rejected for a non-admin caller with the same RBAC shape already proven for `ROLE_SELLER` (§17); registering as the configured `bidstream.admin.bootstrap-username` (§17.1) grants `ROLE_ADMIN`, registering as anyone else never does, and the mechanism is a no-op end-to-end when the property is unset.
 
 ---
 
@@ -1130,9 +1270,9 @@ Each phase is independently demoable — build them in order so you always have 
 - Real payment/settlement via a PSP + escrow.
 - Dutch auctions, sealed-bid, buy-it-now formats.
 - Fraud/shill-bidding detection consumer on the bid stream.
-- Search service (Elasticsearch/OpenSearch) for rich discovery.
+- Search service (Elasticsearch/OpenSearch) for rich discovery — relevance ranking, typo tolerance, faceted filtering. v1.4's Postgres `tsvector` search (§14.4) covers basic keyword filtering; this is the upgrade path once that stops being enough, not a replacement for it from day one.
 - Multi-region active-active with geo-partitioned auctions.
-- Push/email/SMS notification channels off the `notifications` topic.
+- Push/email/SMS notification channels off the `notifications` topic — a natural extension once built would be "an auction you're watching is ending soon," sourced from the `watches` table (§8.4) added in v1.4. Not built now: `GET /me/watching` alone satisfies FR-13, and a notification trigger is a separate feature with its own scheduling/dedup concerns that nothing today has asked for.
 - Event sourcing of the full auction aggregate (rebuild any state by replay).
 
 ---

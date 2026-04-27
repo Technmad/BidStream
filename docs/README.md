@@ -19,7 +19,6 @@ grouped by what question it answers.
 | Doc | Answers |
 |---|---|
 | [`RUNBOOK.md`](RUNBOOK.md) | Local dev commands, monitoring, common incidents (DLQ messages, stuck schedulers, missing bid partitions), known limitations. |
-| [`QA-REVIEW.md`](QA-REVIEW.md) | Findings from the last QA pass and their resolution status. |
 | [`../k8s/README.md`](../k8s/README.md) | Deploying to Kubernetes (manifests, HPA, secrets). |
 | [`../load-test/README.md`](../load-test/README.md) | Running the k6 bid-burst load test. |
 
