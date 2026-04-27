@@ -136,6 +136,24 @@ class AuctionControllerIT {
     }
 
     @Test
+    void aNegativeReservePriceIsRejectedAtTheDtoLayerWithACleanBadRequest() {
+        // QA-REVIEW.md Medium: reservePrice had no @DecimalMin, unlike startingPrice/minIncrement,
+        // so a malformed value used to reach the DB layer relying solely on its CHECK constraint.
+        String token = registerAndLogin("seller");
+        Instant start = Instant.now().plus(1, ChronoUnit.HOURS);
+        Instant end = start.plus(1, ChronoUnit.HOURS);
+
+        given()
+                .header("Authorization", "Bearer " + token)
+                .contentType("application/json")
+                .body("{\"title\":\"Bad Reserve Lot\",\"startingPrice\":50.00,\"reservePrice\":-10.00,"
+                        + "\"minIncrement\":5.00,\"startTime\":\"" + start + "\",\"endTime\":\"" + end + "\"}")
+                .post("/api/v1/auctions")
+                .then()
+                .statusCode(400);
+    }
+
+    @Test
     void onlyTheOwnerCanCancelAnAuction() {
         String ownerToken = registerAndLogin("owner");
         String otherToken = registerAndLogin("other");
