@@ -20,7 +20,7 @@ public final class AuctionDtos {
             String description,
             UUID categoryId,
             @NotNull @DecimalMin(value = "0", inclusive = true) BigDecimal startingPrice,
-            BigDecimal reservePrice,
+            @DecimalMin(value = "0", inclusive = true) BigDecimal reservePrice,
             @NotNull @DecimalMin(value = "0.01") BigDecimal minIncrement,
             @NotNull Instant startTime,
             @NotNull @Future Instant endTime,
