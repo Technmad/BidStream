@@ -88,7 +88,12 @@ before relying on them at real scale.
 
 ## Known limitations (see also `k8s/README.md`)
 
-- JWT signing keys are generated per-instance at startup (`JwtKeyConfig`) - not shared across
-  replicas. Fine for a single instance; breaks token verification across multiple pods until
-  fixed (load the key from a shared secret/KMS instead).
 - The `outbox` table has no pruning job (see [ADR-0004](adr/0004-transactional-outbox-for-event-publishing.md)).
+
+## JWT signing key provisioning
+
+`JwtKeyConfig` loads a fixed RSA key pair from `BIDSTREAM_JWT_PRIVATE_KEY_PEM`/
+`BIDSTREAM_JWT_PUBLIC_KEY_PEM` (see `k8s/secret.example.yaml`) when they're set, and falls back to
+generating an ephemeral per-instance key pair otherwise. Generate the pair once per environment and
+put it in the Secret before scaling past one replica - an ephemeral key can't be verified by a
+different pod, and a restart invalidates every outstanding session.
