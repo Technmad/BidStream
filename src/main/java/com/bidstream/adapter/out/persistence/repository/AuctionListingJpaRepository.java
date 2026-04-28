@@ -27,18 +27,21 @@ public interface AuctionListingJpaRepository extends org.springframework.data.re
             SELECT a.* FROM auctions a
              WHERE (:status IS NULL OR a.status = :status)
                AND (:categoryId IS NULL OR a.category_id = :categoryId)
+               AND (:sellerId IS NULL OR a.seller_id = :sellerId)
                AND (:q IS NULL OR a.search_vector @@ plainto_tsquery('english', :q))
             """,
             countQuery = """
             SELECT count(*) FROM auctions a
              WHERE (:status IS NULL OR a.status = :status)
                AND (:categoryId IS NULL OR a.category_id = :categoryId)
+               AND (:sellerId IS NULL OR a.seller_id = :sellerId)
                AND (:q IS NULL OR a.search_vector @@ plainto_tsquery('english', :q))
             """,
             nativeQuery = true)
     Page<AuctionJpaEntity> search(
             @Param("status") String status,
             @Param("categoryId") UUID categoryId,
+            @Param("sellerId") UUID sellerId,
             @Param("q") String q,
             Pageable pageable);
 

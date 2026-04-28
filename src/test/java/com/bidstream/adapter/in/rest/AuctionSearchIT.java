@@ -5,6 +5,7 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
 
 import io.restassured.RestAssured;
+import io.restassured.response.Response;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
@@ -50,16 +51,22 @@ class AuctionSearchIT {
     }
 
     private void createAuction(String sellerToken, String title, String description) {
+        createAuctionAndGetSellerId(sellerToken, title, description);
+    }
+
+    private String createAuctionAndGetSellerId(String sellerToken, String title, String description) {
         Instant start = Instant.now().minus(1, ChronoUnit.MINUTES);
         Instant end = Instant.now().plus(1, ChronoUnit.HOURS);
-        given()
+        Response response = given()
                 .header("Authorization", "Bearer " + sellerToken)
                 .contentType("application/json")
                 .body("{\"title\":\"" + title + "\",\"description\":\"" + description + "\","
                         + "\"startingPrice\":50.00,\"minIncrement\":5.00,"
                         + "\"startTime\":\"" + start + "\",\"endTime\":\"" + end + "\"}")
                 .post("/api/v1/auctions")
-                .then().statusCode(201);
+                .then().statusCode(201)
+                .extract().response();
+        return response.path("sellerId");
     }
 
     @Test
@@ -99,5 +106,23 @@ class AuctionSearchIT {
                 .get("/api/v1/auctions")
                 .then().statusCode(200)
                 .body("content.title", hasItem(title));
+    }
+
+    @Test
+    void sellerIdFiltersToOnlyThatSellersListings() {
+        String sellerAToken = registerAndLogin("seller-a");
+        String sellerBToken = registerAndLogin("seller-b");
+        String marker = UUID.randomUUID().toString().substring(0, 8);
+        String titleA = "Seller A Lot " + marker;
+        String titleB = "Seller B Lot " + marker;
+
+        String sellerAId = createAuctionAndGetSellerId(sellerAToken, titleA, "from seller a");
+        createAuction(sellerBToken, titleB, "from seller b");
+
+        given().queryParam("sellerId", sellerAId)
+                .get("/api/v1/auctions")
+                .then().statusCode(200)
+                .body("content.title", hasItem(titleA))
+                .body("content.title", not(hasItem(titleB)));
     }
 }

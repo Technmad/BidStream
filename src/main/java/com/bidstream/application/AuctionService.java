@@ -27,9 +27,10 @@ public class AuctionService {
         this.listingRepository = listingRepository;
     }
 
-    public Page<AuctionItem> search(AuctionStatus status, UUID categoryId, String q, Pageable pageable) {
+    public Page<AuctionItem> search(AuctionStatus status, UUID categoryId, UUID sellerId, String q,
+                                     Pageable pageable) {
         return listingRepository
-                .search(status == null ? null : status.name(), categoryId,
+                .search(status == null ? null : status.name(), categoryId, sellerId,
                         (q == null || q.isBlank()) ? null : q, pageable)
                 .map(AuctionMapper::toDomain);
     }
