@@ -127,5 +127,6 @@ class TickBroadcasterIT {
         assertThat(((Number) Double.valueOf(message.get("price").toString())).doubleValue())
                 .isEqualTo(55.00);
         assertThat(message.get("serverNow")).isNotNull();
+        assertThat(((Number) message.get("version")).longValue()).isGreaterThan(0);
     }
 }

@@ -147,7 +147,8 @@ public class AuctionCommandProcessor {
             BidOutcome.Accepted accepted = (BidOutcome.Accepted) outcome;
             UUID bidId = UUID.randomUUID();
             acceptedBidPersister.persist(cmd.auctionId(), cmd.bidderId(), cmd.amount(), cmd.type(),
-                    cmd.idempotencyKey(), cmd.occurredAt(), bidId, accepted, cmd.eventId(), cmd.correlationId());
+                    cmd.idempotencyKey(), cmd.occurredAt(), bidId, accepted, cmd.eventId(), cmd.correlationId(),
+                    auction.version());
 
             // Auto-bid ladder (PDR §12): if another bidder has a standing proxy max higher than
             // this manual bid, the system immediately counter-bids on their behalf - resolved
@@ -227,7 +228,7 @@ public class AuctionCommandProcessor {
 
             writeOutboxEvent(cmd.auctionId(), AUCTIONS_EVENTS_TOPIC, new AuctionEndedEvent(
                     cmd.eventId(), BidCommand.CURRENT_SCHEMA_VERSION, cmd.auctionId(), outcomeName,
-                    winnerId, finalPrice, cmd.occurredAt(), cmd.correlationId()));
+                    winnerId, finalPrice, auction.version(), cmd.occurredAt(), cmd.correlationId()));
         } catch (RuntimeException ex) {
             workingSet.evict(cmd.auctionId());
             throw ex;
@@ -282,7 +283,7 @@ public class AuctionCommandProcessor {
         String syntheticIdempotencyKey = "auto:" + UUID.randomUUID();
         acceptedBidPersister.persist(auctionId, leaderAutoBid.bidderId(), resolution.price().amount(),
                 BidType.AUTO.name(), syntheticIdempotencyKey, occurredAt, autoBidRowId, resolvedOutcome,
-                UUID.randomUUID(), UUID.randomUUID());
+                UUID.randomUUID(), UUID.randomUUID(), auction.version());
     }
 
     /**
@@ -326,7 +327,8 @@ public class AuctionCommandProcessor {
             return;
         }
         auctionRepository.findById(auctionId).ifPresent(auction -> {
-            priceCache.setCurrent(auctionId, auction.currentPrice(), auction.currentWinnerId(), auction.endTime());
+            priceCache.setCurrent(auctionId, auction.currentPrice(), auction.currentWinnerId(), auction.endTime(),
+                    auction.version());
             priceCache.markDirty(auctionId);
         });
     }

@@ -97,6 +97,9 @@ class RedisPriceCacheIT {
             String price = (String) redisTemplate.opsForHash().get(redisKey, "price");
             assertThat(price).isNotNull();
             assertThat(new java.math.BigDecimal(price)).isEqualByComparingTo("55.00");
+            String version = (String) redisTemplate.opsForHash().get(redisKey, "version");
+            assertThat(version).isNotNull();
+            assertThat(Long.parseLong(version)).isGreaterThan(0);
         });
     }
 
