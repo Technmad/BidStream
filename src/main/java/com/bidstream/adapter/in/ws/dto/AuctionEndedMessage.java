@@ -11,9 +11,11 @@ public record AuctionEndedMessage(
         String outcome,
         UUID winnerId,
         BigDecimal finalPrice,
+        long version,
         Instant serverNow) {
 
-    public static AuctionEndedMessage of(UUID auctionId, String outcome, UUID winnerId, BigDecimal finalPrice) {
-        return new AuctionEndedMessage("AUCTION_ENDED", auctionId, outcome, winnerId, finalPrice, Instant.now());
+    public static AuctionEndedMessage of(UUID auctionId, String outcome, UUID winnerId, BigDecimal finalPrice,
+                                          long version) {
+        return new AuctionEndedMessage("AUCTION_ENDED", auctionId, outcome, winnerId, finalPrice, version, Instant.now());
     }
 }

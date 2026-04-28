@@ -42,10 +42,10 @@ public class AcceptedBidPersister {
 
     public void persist(UUID auctionId, UUID bidderId, BigDecimal amount, String type,
                          String idempotencyKey, Instant occurredAt, UUID bidId,
-                         BidOutcome.Accepted accepted, UUID eventId, UUID correlationId) {
+                         BidOutcome.Accepted accepted, UUID eventId, UUID correlationId, long version) {
         // Project to Redis synchronously, before the durable writes (PDR §9.6 step 3) - the
         // ticker (Phase 3) reads this, never the DB, for broadcast.
-        priceCache.setCurrent(auctionId, accepted.newPrice(), accepted.newWinnerId(), accepted.newEndTime());
+        priceCache.setCurrent(auctionId, accepted.newPrice(), accepted.newWinnerId(), accepted.newEndTime(), version);
         priceCache.markDirty(auctionId);
         leaderboardCache.recordBid(auctionId, bidderId, amount);
 
@@ -56,7 +56,7 @@ public class AcceptedBidPersister {
             String json = objectMapper.writeValueAsString(new BidAcceptedEvent(
                     eventId, BidCommand.CURRENT_SCHEMA_VERSION, auctionId, bidId, bidderId,
                     amount, accepted.previousWinnerId(), accepted.newEndTime(), accepted.extended(),
-                    occurredAt, correlationId));
+                    version, occurredAt, correlationId));
             outboxRepository.insert(auctionId, BIDS_ACCEPTED_TOPIC, auctionId.toString(), json);
         } catch (Exception e) {
             throw new IllegalStateException("Failed to serialize bids.accepted outbox event", e);

@@ -15,6 +15,7 @@ public record BidAcceptedEvent(
         UUID previousWinnerId,
         Instant newEndTime,
         boolean extended,
+        long version,
         Instant occurredAt,
         UUID correlationId) {
 }

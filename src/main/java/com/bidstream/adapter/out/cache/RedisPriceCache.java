@@ -29,12 +29,13 @@ public class RedisPriceCache implements PriceCache {
     }
 
     @Override
-    public void setCurrent(UUID auctionId, Money price, UUID winnerId, Instant endTime) {
+    public void setCurrent(UUID auctionId, Money price, UUID winnerId, Instant endTime, long version) {
         String key = currentKey(auctionId);
         Map<String, String> fields = new HashMap<>();
         fields.put("price", price.amount().toPlainString());
         fields.put("winnerId", winnerId == null ? "" : winnerId.toString());
         fields.put("endTime", endTime.toString());
+        fields.put("version", Long.toString(version));
         redisTemplate.opsForHash().putAll(key, fields);
         redisTemplate.expireAt(key, endTime.plus(TTL_BUFFER));
     }

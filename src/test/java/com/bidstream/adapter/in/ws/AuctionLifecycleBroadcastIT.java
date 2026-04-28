@@ -142,6 +142,7 @@ class AuctionLifecycleBroadcastIT {
         assertThat(message).isNotNull();
         assertThat(message.get("auctionId")).isEqualTo(auctionId);
         assertThat(Instant.parse((String) message.get("newEndTime"))).isAfter(end);
+        assertThat(((Number) message.get("version")).longValue()).isGreaterThan(0);
     }
 
     private Map<String, Object> pollForType(BlockingQueue<Object> received, String type) throws InterruptedException {
@@ -201,5 +202,6 @@ class AuctionLifecycleBroadcastIT {
         assertThat(message.get("winnerId")).isEqualTo(bidderId.toString());
         assertThat(((Number) Double.valueOf(message.get("finalPrice").toString())).doubleValue())
                 .isEqualTo(60.00);
+        assertThat(((Number) message.get("version")).longValue()).isGreaterThan(0);
     }
 }

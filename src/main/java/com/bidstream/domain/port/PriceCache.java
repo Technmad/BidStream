@@ -10,7 +10,7 @@ import java.util.UUID;
  */
 public interface PriceCache {
 
-    void setCurrent(UUID auctionId, Money price, UUID winnerId, Instant endTime);
+    void setCurrent(UUID auctionId, Money price, UUID winnerId, Instant endTime, long version);
 
     void markDirty(UUID auctionId);
 }

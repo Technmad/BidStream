@@ -52,7 +52,7 @@ public class NotifierConsumer {
 
         if (event.extended()) {
             messagingTemplate.convertAndSend("/topic/auctions/" + event.auctionId(),
-                    AuctionExtendedMessage.of(event.auctionId(), event.newEndTime()));
+                    AuctionExtendedMessage.of(event.auctionId(), event.newEndTime(), event.version()));
         }
         ack.acknowledge();
     }
@@ -78,7 +78,8 @@ public class NotifierConsumer {
     public void onAuctionEnded(ConsumerRecord<String, String> record, Acknowledgment ack) throws Exception {
         AuctionEndedEvent event = objectMapper.readValue(record.value(), AuctionEndedEvent.class);
         messagingTemplate.convertAndSend("/topic/auctions/" + event.auctionId(),
-                AuctionEndedMessage.of(event.auctionId(), event.outcome(), event.winnerId(), event.finalPrice()));
+                AuctionEndedMessage.of(event.auctionId(), event.outcome(), event.winnerId(), event.finalPrice(),
+                        event.version()));
         ack.acknowledge();
     }
 }

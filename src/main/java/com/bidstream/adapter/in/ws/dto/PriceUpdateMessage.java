@@ -10,10 +10,11 @@ public record PriceUpdateMessage(
         String price,
         String winnerId,
         Instant endTime,
+        long version,
         Instant serverNow) {
 
-    public static PriceUpdateMessage of(UUID auctionId, String price, String winnerId, Instant endTime) {
+    public static PriceUpdateMessage of(UUID auctionId, String price, String winnerId, Instant endTime, long version) {
         return new PriceUpdateMessage("PRICE_UPDATE", auctionId, price,
-                (winnerId == null || winnerId.isBlank()) ? null : winnerId, endTime, Instant.now());
+                (winnerId == null || winnerId.isBlank()) ? null : winnerId, endTime, version, Instant.now());
     }
 }

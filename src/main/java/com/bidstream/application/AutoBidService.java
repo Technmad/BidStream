@@ -122,6 +122,6 @@ public class AutoBidService {
 
         acceptedBidPersister.persist(auctionId, resolution.winnerId(), resolution.price().amount(),
                 BidType.AUTO.name(), "auto:" + UUID.randomUUID(), Instant.now(), UUID.randomUUID(),
-                accepted, UUID.randomUUID(), UUID.randomUUID());
+                accepted, UUID.randomUUID(), UUID.randomUUID(), auction.version());
     }
 }

@@ -57,8 +57,9 @@ public class TickBroadcaster {
             String price = (String) fields.get("price");
             String winnerId = (String) fields.get("winnerId");
             Instant endTime = Instant.parse((String) fields.get("endTime"));
+            long version = Long.parseLong((String) fields.get("version"));
 
-            PriceUpdateMessage message = PriceUpdateMessage.of(auctionId, price, winnerId, endTime);
+            PriceUpdateMessage message = PriceUpdateMessage.of(auctionId, price, winnerId, endTime, version);
             messagingTemplate.convertAndSend("/topic/auctions/" + auctionId, message);
         } catch (Exception e) {
             log.warn("Failed to broadcast price update for auctionId={}", rawAuctionId, e);

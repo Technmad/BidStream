@@ -7,7 +7,8 @@ grouped by what question it answers.
 
 | Doc | Answers |
 |---|---|
-| [`PDR-RealTimeAuctionPlatform.md`](../PDR-RealTimeAuctionPlatform.md) | The full design: concurrency model, single-writer-per-partition ordering, real-time clock sync contract, failure modes. Start here for *why* the system is built this way. |
+| [`PDR-RealTimeAuctionPlatform.md`](../PDR-RealTimeAuctionPlatform.md) | The full backend design: concurrency model, single-writer-per-partition ordering, real-time clock sync contract, failure modes. Start here for *why* the system is built this way. |
+| [`FRONTEND-PDR.md`](../FRONTEND-PDR.md) | The web client design: WebSocket connection management, optimistic/confirmed state reconciliation, clock-offset countdown, connection lifecycle, screen-by-screen data contracts against the verified backend API. |
 | [`adr/0001-event-driven-not-event-sourced.md`](adr/0001-event-driven-not-event-sourced.md) | Why Kafka is a durable ingestion log, not the system of record. |
 | [`adr/0002-single-writer-per-auction-partition.md`](adr/0002-single-writer-per-auction-partition.md) | Why each auction's commands are ordered by a single partition writer. |
 | [`adr/0003-integration-tests-against-local-stack-not-testcontainers.md`](adr/0003-integration-tests-against-local-stack-not-testcontainers.md) | Why `*IT` tests run against `docker compose`, not Testcontainers. |

@@ -8,9 +8,10 @@ public record AuctionExtendedMessage(
         String type,
         UUID auctionId,
         Instant newEndTime,
+        long version,
         Instant serverNow) {
 
-    public static AuctionExtendedMessage of(UUID auctionId, Instant newEndTime) {
-        return new AuctionExtendedMessage("AUCTION_EXTENDED", auctionId, newEndTime, Instant.now());
+    public static AuctionExtendedMessage of(UUID auctionId, Instant newEndTime, long version) {
+        return new AuctionExtendedMessage("AUCTION_EXTENDED", auctionId, newEndTime, version, Instant.now());
     }
 }

@@ -4,8 +4,8 @@
 |---|---|
 | **Project name** | BidStream — Real-Time Auction Platform |
 | **Document type** | Project Design Requirements / Technical Design Document |
-| **Version** | 1.4 |
-| **Status** | Draft for build — API surface extended to close v1.3's audited gaps |
+| **Version** | 1.5 |
+| **Status** | Draft for build — API surface extended (v1.4) and broadcast ordering closed (v1.5) following a staff-level review of the frontend companion PDR |
 | **Target stack** | Java 21 (LTS), Spring Boot 3.x, Apache Kafka, PostgreSQL, Redis, Docker |
 | **Deployment target** | Docker Compose (local/dev), Kubernetes-ready (production) |
 
@@ -19,7 +19,8 @@
 | 1.1 | **Architectural corrections.** (1) Reconciled source of truth — this is event-*driven*, not event-*sourced*; Postgres is the system of record, Kafka is the durable ingestion log + result-event stream. (2) Split the bid-latency NFR into *edge-ack* vs *decision* latency; bids are async (202 + WebSocket result), never a synchronous reply over Kafka. (3) Auction close is now a **command routed onto the auction's own partition**, ordered against every bid by the single per-auction consumer (kills clock-skew / double-close). (4) Made the single-hot-auction throughput ceiling explicit and dropped the unmeasured 5k/sec headline. (5) Bid processor is **stateless per message** — it reloads current state each time, so partition reassignment needs no in-memory rebuild. |
 | 1.2 | **Operational hardening for load.** (6) **Tick-based broadcaster** — price fan-out decoupled from bid rate; a per-node ticker reads Redis every ~250ms and broadcasts the latest. (7) **Write-behind DB batching** with the strict rule that Kafka offsets commit *only after* the batch is durably flushed to Postgres. (8) **Server-authoritative time** — client clocks are cosmetic; countdowns run against a server clock-offset estimate. (9) Idempotency-key TTL clarified (Redis fast path vs durable unique constraint). (10) Bid history **time-partitioned** for archival. |
 | 1.3 | **Failover correctness — the handoff, mechanized.** The v1.2 "stateless per message → replay is free" claim was unsafe. Five coupled defects fixed: (a) dedup was decided by *auction state* (`ALREADY_HIGHEST`) not *event identity*, so a replayed accepted bid could be re-emitted as REJECTED — now gated by an **`event_id`** ledger; (b) the bid unique key included `created_at DEFAULT now()`, so a replay got a fresh timestamp and slipped through — `created_at` now carries the command's **`occurredAt`**, making the guard replay-stable; (c) decisions read Redis, which can be **ahead of Postgres** after a crash → phantom price — the processor now decides from a **working set seeded from committed Postgres**, never Redis; (d) once (b) works, a replayed batch would abort the flush on conflict — all durable inserts are now **`ON CONFLICT DO NOTHING`**; (e) the decision event was produced *after* the transaction and could be lost — it is now an **outbox row inside the flush transaction**. Plus **per-partition** buffers/offsets, and the "stateless per message" language retired in favour of **"bounded, replayable working set."** Two tightenings added beyond the review: working-set entries with un-flushed deltas are **pinned against eviction**, and the ledger dedup DB check is **bounded to the post-rebalance replay window**. |
-| 1.4 | **API-surface completeness — the thin parts, specified.** §9/§10/§19 were audited and revised three times over; §14's plain CRUD surface never was, and a strict PDR-vs-built review surfaced the cost: `GET /me/watching` (§14.1) named an endpoint with no domain model, no schema, and no way to ever start "watching" anything behind it; FR-3's "search" was never carried into an API param or a data-model decision; the `categories` table (§8) had no endpoint reading it at all. Fixed by extending the spec, not by letting the build quietly improvise past it: (1) a new **`Watch`** entity + `watches` table (§7.1, §8.4) makes `GET /me/watching` buildable, modeled explicitly as a **durable bookmark decoupled from live WebSocket delivery** (§14.4) so the two are never conflated; (2) a new **`Category`** entity + `GET /categories` (§7.1, §14.4), admin-curated rather than seller-created, so the taxonomy `categoryId` already assumed can actually be discovered; (3) **basic search** (§8.4, §14.4) specified as Postgres `tsvector` + GIN full-text *filtering* — deliberately not ranking, staying inside the boundary §2.2 already drew around relevance engines. None of the three touch §9's concurrency machinery — each is a plain CRUD/read path outside the single-writer Kafka pipeline, and §14.4 states why explicitly rather than leaving it for the next reader to wonder about. (4) Gating category creation on `ROLE_ADMIN` surfaced the same class of gap one level down — the role was named in §17's AuthZ table since the original PDR with no account ever able to hold it. §17.1 closes that with a configured bootstrap-username mechanism, the same shape as JWT key provisioning. |
+| 1.4 | **API-surface completeness — the thin parts, specified.** §9/§10/§19 were audited and revised three times over; §14's plain CRUD surface never was, and a strict PDR-vs-built review surfaced the cost: `GET /me/watching` (§14.1) named an endpoint with no domain model, no schema, and no way to ever start "watching" anything behind it; FR-3's "search" was never carried into an API param or a data-model decision; the `categories` table (§8) had no endpoint reading it at all. Fixed by extending the spec, not by letting the build quietly improvise past it: (1) a new **`Watch`** entity + `watches` table (§7.1, §8.4) makes `GET /me/watching` buildable, modeled explicitly as a **durable bookmark decoupled from live WebSocket delivery** (§14.4) so the two are never conflated; (2) a new **`Category`** entity + `GET /categories` (§7.1, §14.4), admin-curated rather than seller-created, so the taxonomy `categoryId` already assumed can actually be discovered; (3) **basic search** (§8.4, §14.4) specified as Postgres `tsvector` + GIN full-text *filtering* — deliberately not ranking, staying inside the boundary §2.2 already drew around relevance engines. None of these touch §9's concurrency machinery — each is a plain CRUD/read path outside the single-writer Kafka pipeline, and §14.4 states why explicitly rather than leaving it for the next reader to wonder about. (4) Gating category creation on `ROLE_ADMIN` surfaced the same class of gap one level down — the role was named in §17's AuthZ table since the original PDR with no account ever able to hold it. §17.1 closes that with a configured bootstrap-username mechanism, the same shape as JWT key provisioning. (5) A fourth, differently-shaped gap surfaced once frontend planning against this contract asked "how does a seller list their own auctions" and the honest answer was "there's no way" — **`sellerId`** joins `status`/`category`/`q` as a fourth composable filter on the same `GET /auctions` query (§14.4), not a dedicated endpoint, since a dedicated `GET /me/listings` would only ever be this same query with `sellerId` pinned to the caller. |
+| 1.5 | **Broadcast ordering — the key §13 already specified but nothing ever carried to the client.** An external staff-level review of the frontend companion PDR (`FRONTEND-PDR.md`) found that §13's own Redis schema table has listed `version` in the `auction:{id}:current` hash since the original PDR — and §15.2's broadcast examples never included it, and neither did the actual `PriceCache` port or `RedisPriceCache` implementation. That's a two-layer gap: this document was briefly self-inconsistent (one section specified a field, another section silently dropped it), and the code hadn't caught up to even the inconsistent spec. The consequence is real: `serverNow` is a *broadcast* timestamp, not a *state* version — two messages can carry increasing `serverNow` while representing the same or an out-of-order `auctions.version` (exactly the kind of stale-projection-mistaken-for-truth bug §9.6/§19 eliminated at the processor tier, reappearing at the client tier for want of an ordering key). Fixed: (1) **`version` now flows end-to-end** — `PriceCache.setCurrent` takes it, `RedisPriceCache` stores it in the hash exactly as §13 always said to, and `PRICE_UPDATE`/`AUCTION_EXTENDED`/`AUCTION_ENDED` (§15.2) all carry it; `GET /auctions/{id}` already returned it via `AuctionResponse` — no REST change needed there. (2) §15.5's offset formula is corrected to state the one-way estimate it has always actually had to compute — a broadcast tick is a push with no client-initiated request to round-trip against, so the round-trip midpoint the prose showed was never actually computable. (3) §14.2's `429` example is corrected to match what `RateLimitFilter` actually sends today — `retryAfterMs` is removed from the example rather than left as a field the code doesn't produce and no client should build against; it moves to §26 as a genuine future addition instead. (4) The `leaderboard` endpoint — real, shipped, unrestricted, and never named anywhere in §14.1 — is added to the endpoint table, closing a fifth instance of the same "built past the spec" pattern v1.4 was written to stop. |
 
 ### The coherent operational story (read this first)
 
@@ -825,6 +826,10 @@ Redis is the low-latency read + coordination layer. Everything here is **rebuild
 
 **No per-auction pub/sub channel needed.** v1.0 fanned each accepted bid out over a `ws:auction:{id}` pub/sub channel — that is exactly the firehose that melts the edge under a hot auction. It is replaced by the ticker reading Redis, so broadcast volume is bounded by tick rate, not bid rate.
 
+**`version` exists in this hash for a reason beyond optimistic-lock parity with Postgres — it's the client's only ordering key (v1.5).** `serverNow` on a broadcast message tells a client *when* the message was sent, never *how new the state in it is* relative to some other confirmed state the client already has (a REST fetch, an earlier tick, a post-reconnect resync). Two states can carry increasing `serverNow` while representing the same or an out-of-order `auctions.version` — the client-tier version of the exact phantom-projection problem §9.6 solves at the processor tier. `version` must therefore be threaded from this hash all the way into every broadcast message (§15.2), not only read back by the processor that wrote it.
+
+**`leaderboard` returns raw `bidderId`, and that is a deliberate, not accidental, choice — but it has a real consequence a client must own.** This document does not pseudonymize bidder identity anywhere: `currentWinnerId` on an auction, `winnerId` on a `PRICE_UPDATE`/`AUCTION_ENDED`, and `bidderId` here are all the same raw `UUID`. Building a server-side per-auction pseudonym ("Bidder #4") would be the more privacy-respecting design, but it's real scope — a new mapping, a new consistency question (does the same user get the same handle across their own repeat views? almost certainly yes, which reintroduces a form of stable identity anyway) — for a v1 that doesn't otherwise pseudonymize anything (usernames are already public via other endpoints). **The decision for this build: identity is raw and consistent everywhere in the API; any masking a client wants to do for display purposes (e.g. "a bidder" instead of a UUID) is a presentation choice on top of raw data, not a privacy guarantee this API makes.** A client must not present a masked winner next to an unmasked leaderboard on the same screen as if the backend were the source of that inconsistency — the backend is consistent; a client that masks in one place and not another would be introducing its own inconsistency on top of a consistent API. See `FRONTEND-PDR.md` §12.1/§4.4 for how the client resolves this. Revisit server-side pseudonymization in §26 if this ever becomes a real product requirement rather than a nice-to-have.
+
 ---
 
 ## 14. API Design — REST
@@ -844,6 +849,7 @@ Base path `/api/v1`. JSON. Auth via `Authorization: Bearer <JWT>`. All mutating 
 | PATCH | `/auctions/{id}` | owner | Edit (only before OPEN). |
 | POST | `/auctions/{id}/cancel` | owner/admin | Cancel. |
 | GET | `/auctions/{id}/bids` | – | Paginated bid history. |
+| GET | `/auctions/{id}/leaderboard?limit=` | – | Top-N current bidders, `[{bidderId, amount}]` (§13's leaderboard sorted set). **Never named in this table before v1.5** despite being real and shipped since early in the build — see §13's note on why `bidderId` here is raw, not pseudonymous, and what that means for a client. |
 | POST | `/auctions/{id}/bids` | user | Place a bid (idempotent). |
 | POST | `/auctions/{id}/auto-bid` | user | Set/replace proxy max. |
 | DELETE | `/auctions/{id}/auto-bid` | user | Cancel proxy bid. |
@@ -863,10 +869,16 @@ Request:  { "amount": "125.00" }
   { "bidId": "uuid", "status": "PENDING",
     "correlationId": "uuid" }        // final result arrives via WebSocket
 
-409 Conflict:  { "error": "BELOW_MIN_INCREMENT",
+409 Conflict:  { "type": "about:blank", "title": "BELOW_MIN_INCREMENT", "status": 409,
+                 "detail": "BELOW_MIN_INCREMENT", "reason": "BELOW_MIN_INCREMENT",
                  "currentPrice": "130.00", "minIncrement": "5.00" }
-429 Too Many Requests: { "error": "RATE_LIMITED", "retryAfterMs": 800 }
+429 Too Many Requests: { "type": "about:blank", "title": "Too Many Requests", "status": 429,
+                 "detail": "Rate limit exceeded", "reason": "RATE_LIMITED" }
 ```
+
+**No `retryAfterMs` on the `429` (v1.5 correction).** Earlier revisions of this example showed one; `RateLimitFilter` has never actually computed or sent it — the example was aspirational, not descriptive, and the frontend PDR's own review of this contract correctly refused to build a countdown UI against a field the running code doesn't produce (`FRONTEND-PDR.md` §4.3). Removed here rather than left to mislead the next integrator who reads the example instead of the code. Sending a real `retryAfterMs` (the sliding-window limiter already knows the window's reset time) is a small, genuine future addition — tracked in §26, not implied here as already done.
+
+**Both examples are also corrected to the actual RFC 7807 `ProblemDetail` envelope (a second staleness this v1.5 review turned up beyond the field it set out to check).** Earlier revisions showed a flat ad-hoc `{ "error": "...", ...}` shape for both the `409` and the `429` — that was true of the code once, before `GlobalExceptionHandler`'s `BidRejectedException` mapping and `RateLimitFilter`'s hand-built `ProblemDetail` (both already shipped, pre-dating v1.4) replaced it with the same `type`/`title`/`status`/`detail` envelope every other error response in this API uses, plus a `reason` property carrying the same enum value the old `error` field held. The envelope changed; these two examples simply never caught up. No code changes accompany this correction — the running code was already right.
 
 The API returns **202 Accepted** because bids are processed asynchronously through Kafka. The authoritative accepted/rejected outcome is pushed to the client over WebSocket (correlated by `correlationId`). For clients that prefer synchronous UX, offer an optional short-lived server-side wait on the result.
 
@@ -880,11 +892,14 @@ The API returns **202 Accepted** because bids are processed asynchronously throu
 ### 14.4 API additions for the previously-thin surface (v1.4)
 
 §14.1 named `GET /me/watching` without ever specifying how a user starts watching something, and
-FR-3's "search" and the `categories` table (§8) never got an endpoint at all. **None of the three
-below touch §9's concurrency core** — they're plain CRUD/read paths against Postgres, entirely
-outside the single-writer Kafka pipeline, because none of them mutate auction state or need
-per-auction ordering. That's not an omission; it's stated here explicitly so it doesn't have to be
-inferred.
+FR-3's "search" and the `categories` table (§8) never got an endpoint at all. A fourth gap of the
+same shape surfaced right after: §14.1's listing endpoint had no way for a seller to list *their
+own* auctions either — not because it was deliberately deferred like the other three, but because
+it was simply never named as a requirement anywhere in this document until a "my listings" UI need
+made the absence concrete. **None of the four below touch §9's concurrency core** — they're plain
+CRUD/read paths against Postgres, entirely outside the single-writer Kafka pipeline, because none
+of them mutate auction state or need per-auction ordering. That's not an omission; it's stated here
+explicitly so it doesn't have to be inferred.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
@@ -893,7 +908,15 @@ inferred.
 | POST | `/auctions/{id}/watch` | user | Start watching. Idempotent — watching twice is a no-op, not a duplicate or an error. |
 | DELETE | `/auctions/{id}/watch` | user | Stop watching. Idempotent — unwatching something never watched is a no-op, not a `404`. |
 | GET | `/me/watching` | user | Paginated list of the caller's watched auctions (all statuses, ordered by `end_time`), now backed by the `watches` table (§8.4). |
-| GET | `/auctions?q=...` | – | Adds a `q` param to the existing listing endpoint (§14.1): basic keyword filter over title + description via `search_vector` (§8.4). Composes with the existing `status`/`category` filters (`AND`); results are *filtered*, not relevance-ranked (§2.2). |
+| GET | `/auctions?q=...&sellerId=...` | – | Adds `q` and `sellerId` to the existing listing endpoint (§14.1): `q` is a basic keyword filter over title + description via `search_vector` (§8.4); `sellerId` scopes the listing to one seller's own auctions (a "my listings" view). Both compose with the existing `status`/`category` filters, and with each other, via a single `AND` across all four — there is exactly one listing query, not a separate seller-scoped endpoint, so every filter combination behaves identically regardless of which ones a given caller happens to use. Results are *filtered*, not relevance-ranked (§2.2). |
+
+**Why `sellerId` is a query param on the existing endpoint, not `GET /me/listings`.** A dedicated
+"my listings" endpoint would just be this same query with `sellerId` silently pinned to the caller
+— strictly less flexible (it couldn't also be used to view a *different* seller's public listings,
+which the plain query param supports for free) and one more endpoint to keep consistent with the
+other three filters instead of composing with them. The single-query-many-filters shape already
+established for `status`/`category`/`q` is the right one to extend, not a shape to add a sibling
+to.
 
 **Watching is a bookmark, not a subscription — stated explicitly so it never has to be inferred.**
 `POST .../watch` writes one row to `watches`. It does **not** subscribe the caller to
@@ -944,17 +967,19 @@ SUBSCRIBE /user/queue/notifications     -> targeted (outbid/won) messages
 
 ### 15.2 Message types pushed to `/topic/auctions/{id}`
 
-Every message carries the **server's absolute clock** (`serverNow`) so clients can correct local drift (§15.5):
+Every message carries the **server's absolute clock** (`serverNow`) so clients can correct local drift (§15.5), and, as of v1.5, the auction's **`version`** so a client can tell which of two possibly-racing confirmed states is actually newer (§13):
 
 ```json
 { "type": "PRICE_UPDATE", "auctionId": "...", "price": "125.00",
-  "winnerId": "...", "endTime": "2026-08-17T12:05:30Z",
+  "winnerId": "...", "endTime": "2026-08-17T12:05:30Z", "version": 42,
   "serverNow": "2026-08-17T12:05:00.123Z" }         // sent once per tick, not per bid
 { "type": "AUCTION_EXTENDED", "auctionId": "...", "newEndTime": "...",
-  "serverNow": "..." }
+  "version": 42, "serverNow": "..." }
 { "type": "AUCTION_ENDED", "auctionId": "...", "outcome": "SOLD",
-  "winnerId": "...", "finalPrice": "...", "serverNow": "..." }
+  "winnerId": "...", "finalPrice": "...", "version": 43, "serverNow": "..." }
 ```
+
+**Why `version`, and why it wasn't here until v1.5.** `serverNow` answers "when was this sent"; it does not answer "is this newer, in state terms, than some other confirmed state I already have" — a REST fetch and an in-flight tick, or a tick delivered just before a resync's REST fetch completes, have no natural ordering relative to each other by `serverNow` alone, since it's a wall-clock send time, not a monotonic state counter. `auctions.version` (§8, §9.2) already *is* that counter — it's Postgres's own optimistic-lock column, incremented on every applied bid or close, and it was already present in §13's Redis schema. It simply never made it past the Redis hash into the broadcast payload. A client enforcing "apply an incoming confirmed state only if its `version` is strictly greater than the currently-displayed one, otherwise discard it" gets deterministic ordering for free, with no clock comparison — see `FRONTEND-PDR.md` §8.3/§3.1 for the client-side rule this field exists to support.
 
 Targeted to a user via `/user/queue/notifications` (these stay **per-event**, they're low-volume):
 
@@ -988,12 +1013,14 @@ Combined, the hot-auction broadcast load drops from millions/sec to a small, *bo
 
 **Why a naive fix fails.** Sending `endTime` and letting the browser count down against `Date.now()` shows different final seconds to every user, because OS clocks drift. Sending a single server timestamp doesn't fix it either — network jitter poisons any one sample.
 
-**The mechanism (mini-NTP offset):**
+**The mechanism — a one-way estimate, not a round-trip (corrected in v1.5):**
 
-1. The client measures its offset from the server: it records `t0` (send), reads `serverNow` from any inbound message alongside its own `t1` (receive), and estimates `offset = serverNow − (t0 + t1)/2`, smoothing over several samples.
-2. The countdown runs **locally** (smooth, no per-second server chatter) against `serverEndTime` using the corrected clock: `remaining = endTime − (Date.now() + offset)`.
-3. Every `PRICE_UPDATE` tick carries a fresh `serverNow`, so the offset is continuously re-estimated and drift can't accumulate.
-4. In the final seconds, the client leans on frequent ticks + the guaranteed final push, so its display converges to the server's reality exactly when it matters.
+Earlier revisions of this section described a classic NTP round-trip midpoint, `offset = serverNow − (t0 + t1)/2`, computed from a client-recorded send time `t0` and receive time `t1`. That formula describes a request/reply exchange the tick doesn't have: a `PRICE_UPDATE` is a **server-initiated push**, with no client-sent request to time a round trip against — there is no `t0` to record. The mechanism this system actually needs, and actually runs, is simpler and should be described as what it is:
+
+1. On every inbound message carrying `serverNow` (every tick, `AUCTION_EXTENDED`, `AUCTION_ENDED`), the client takes one sample: `offset = serverNow − receivedAt`, where `receivedAt` is simply the local clock at the moment the frame was processed.
+2. This folds one-way network latency into the estimate rather than cancelling it out the way a true round trip would — an honest, stated simplification, not an oversight. It's acceptable specifically *because* of what's already true elsewhere in this design: the ~250ms tick cadence (§15.3) supplies a fresh sample roughly four times a second, and smoothing the last several samples (a median is more robust to one jittery sample than a mean) converges any single sample's latency error out within about a second — comfortably inside a countdown's tolerance. A true round-trip measurement would require an application-level ping/pong this system doesn't otherwise need; adding one solely to shave error off an estimate the tick cadence already keeps small enough isn't worth the added surface.
+3. The countdown runs **locally** (smooth, no per-second server chatter) against the corrected clock: `remaining = endTime − (Date.now() + offset)`.
+4. In the final seconds, the client leans on frequent ticks plus the guaranteed final push (§15.3), so its display converges to the server's reality exactly when it matters most — regardless of how each individual sample's latency error behaved.
 
 The result: every bidder sees the same critical final seconds, and even a badly-skewed client is only ever wrong on screen, never in outcome.
 
@@ -1198,7 +1225,7 @@ bidstream/
 
 1. A deterministic concurrency test proving 1,000 simultaneous bids on one auction yield exactly one winner and a gap-free, fully-ordered accepted-bid history.
 2. A **failover/replay test** that kills the processor mid-batch and asserts, after reassignment, that (a) no committed bid is lost, (b) no already-accepted bid is re-emitted as rejected, (c) `bids` contains no duplicate for the replayed commands, and (d) the final Redis price equals the committed Postgres price. Run it for **both** crash windows: *before* the flush, and *after the flush but before the offset commit.*
-3. **v1.4 additions (§14.4):** watching and unwatching are each idempotent — calling either endpoint twice in a row produces no duplicate row, no error, and no change in behavior on the second call; a basic search query (`?q=...`) matches on both title *and* description, excludes rows matching neither, and composes correctly with an already-applied `status`/`category` filter (`AND`, not `OR`); category creation is rejected for a non-admin caller with the same RBAC shape already proven for `ROLE_SELLER` (§17); registering as the configured `bidstream.admin.bootstrap-username` (§17.1) grants `ROLE_ADMIN`, registering as anyone else never does, and the mechanism is a no-op end-to-end when the property is unset.
+3. **v1.4 additions (§14.4):** watching and unwatching are each idempotent — calling either endpoint twice in a row produces no duplicate row, no error, and no change in behavior on the second call; a basic search query (`?q=...`) matches on both title *and* description, excludes rows matching neither, and composes correctly with an already-applied `status`/`category`/`sellerId` filter (`AND`, not `OR`, across all four); category creation is rejected for a non-admin caller with the same RBAC shape already proven for `ROLE_SELLER` (§17); registering as the configured `bidstream.admin.bootstrap-username` (§17.1) grants `ROLE_ADMIN`, registering as anyone else never does, and the mechanism is a no-op end-to-end when the property is unset.
 
 ---
 
@@ -1274,6 +1301,8 @@ Each phase is independently demoable — build them in order so you always have 
 - Multi-region active-active with geo-partitioned auctions.
 - Push/email/SMS notification channels off the `notifications` topic — a natural extension once built would be "an auction you're watching is ending soon," sourced from the `watches` table (§8.4) added in v1.4. Not built now: `GET /me/watching` alone satisfies FR-13, and a notification trigger is a separate feature with its own scheduling/dedup concerns that nothing today has asked for.
 - Event sourcing of the full auction aggregate (rebuild any state by replay).
+- A real `retryAfterMs` on the `429` rate-limit response (§14.2) — `RedisRateLimiter`'s sliding window already knows when it resets; surfacing that as a field would let a client show an actual countdown instead of a generic "slow down." Not built now: nothing currently reads or needs it, and shipping a field before any client uses it risks the same "spec says it exists, code doesn't produce it" drift v1.5 just corrected.
+- Server-side pseudonymous per-auction bidder handles, replacing the raw `bidderId`/`winnerId` UUIDs this API returns everywhere today (§13). Worth real design work (does the same user get a stable handle across their own visits? almost certainly, which reintroduces a form of persistent identity) if bidder privacy ever becomes an actual product requirement rather than a client-side display preference.
 
 ---
 

@@ -12,6 +12,7 @@ public record AuctionEndedEvent(
         String outcome,
         UUID winnerId,
         BigDecimal finalPrice,
+        long version,
         Instant occurredAt,
         UUID correlationId) {
 }
