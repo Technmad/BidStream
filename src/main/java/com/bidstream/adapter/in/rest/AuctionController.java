@@ -45,13 +45,15 @@ public class AuctionController {
     @GetMapping
     @SecurityRequirements
     @Operation(summary = "Search auctions", description = "Public listing, optionally filtered by "
-            + "status, category, and a basic keyword search (q) over title/description (PDR §14.4).")
+            + "status, category, seller (for a seller's own \"my listings\" view), and a basic "
+            + "keyword search (q) over title/description (PDR §14.4).")
     public Page<AuctionResponse> list(
             @RequestParam(required = false) AuctionStatus status,
             @RequestParam(required = false) UUID category,
+            @RequestParam(required = false) UUID sellerId,
             @RequestParam(required = false) String q,
             Pageable pageable) {
-        return auctionService.search(status, category, q, pageable).map(AuctionResponse::from);
+        return auctionService.search(status, category, sellerId, q, pageable).map(AuctionResponse::from);
     }
 
     @GetMapping("/{id}")
