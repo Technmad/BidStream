@@ -869,7 +869,7 @@ Request:  { "amount": "125.00" }
   { "bidId": "uuid", "status": "PENDING",
     "correlationId": "uuid" }        // final result arrives via WebSocket
 
-409 Conflict:  { "type": "about:blank", "title": "BELOW_MIN_INCREMENT", "status": 409,
+409 Conflict:  { "type": "about:blank", "title": "Conflict", "status": 409,
                  "detail": "BELOW_MIN_INCREMENT", "reason": "BELOW_MIN_INCREMENT",
                  "currentPrice": "130.00", "minIncrement": "5.00" }
 429 Too Many Requests: { "type": "about:blank", "title": "Too Many Requests", "status": 429,
@@ -879,6 +879,8 @@ Request:  { "amount": "125.00" }
 **No `retryAfterMs` on the `429` (v1.5 correction).** Earlier revisions of this example showed one; `RateLimitFilter` has never actually computed or sent it — the example was aspirational, not descriptive, and the frontend PDR's own review of this contract correctly refused to build a countdown UI against a field the running code doesn't produce (`FRONTEND-PDR.md` §4.3). Removed here rather than left to mislead the next integrator who reads the example instead of the code. Sending a real `retryAfterMs` (the sliding-window limiter already knows the window's reset time) is a small, genuine future addition — tracked in §26, not implied here as already done.
 
 **Both examples are also corrected to the actual RFC 7807 `ProblemDetail` envelope (a second staleness this v1.5 review turned up beyond the field it set out to check).** Earlier revisions showed a flat ad-hoc `{ "error": "...", ...}` shape for both the `409` and the `429` — that was true of the code once, before `GlobalExceptionHandler`'s `BidRejectedException` mapping and `RateLimitFilter`'s hand-built `ProblemDetail` (both already shipped, pre-dating v1.4) replaced it with the same `type`/`title`/`status`/`detail` envelope every other error response in this API uses, plus a `reason` property carrying the same enum value the old `error` field held. The envelope changed; these two examples simply never caught up. No code changes accompany this correction — the running code was already right.
+
+**One more precision, caught while re-verifying the fix above (checked against `ProblemDetail`'s actual `getTitle()` fallback, not assumed):** `title` is `"Conflict"` on the `409`, not `"BELOW_MIN_INCREMENT"`. Neither `handleBidRejected` nor `handleValidation` ever calls `.setTitle(...)`, so `ProblemDetail` falls back to the plain HTTP reason phrase for the status code — `"Conflict"` for `409`, `"Too Many Requests"` for `429` (which is why the `429` example's title was already right). The domain-specific reason lives in `detail` and the `reason` property, never in `title`. A near-miss worth naming precisely: this correction pass fixed a stale example by writing a *new*, plausible-looking but still-wrong value into it, which is exactly the failure mode this document has spent several revisions trying to eliminate — the fix for a documentation gap needs the same verification-against-running-code discipline as the original finding, not just a more-detailed-looking guess.
 
 The API returns **202 Accepted** because bids are processed asynchronously through Kafka. The authoritative accepted/rejected outcome is pushed to the client over WebSocket (correlated by `correlationId`). For clients that prefer synchronous UX, offer an optional short-lived server-side wait on the result.
 
