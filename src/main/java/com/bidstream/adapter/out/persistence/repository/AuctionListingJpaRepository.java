@@ -15,14 +15,31 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface AuctionListingJpaRepository extends org.springframework.data.repository.Repository<AuctionJpaEntity, UUID> {
 
-    @Query("""
-            SELECT a FROM AuctionJpaEntity a
+    /**
+     * {@code q} is PDR §14.4's basic keyword search - Postgres full-text filtering via the
+     * generated {@code search_vector} column (§8.4), not relevance ranking (§2.2). A native query
+     * is required here (not JPQL) since Hibernate has no portable path to a Postgres-specific
+     * {@code @@} operator; {@code status}/{@code categoryId} are folded into the same query
+     * rather than kept as a separate JPQL method so all three filters compose correctly with a
+     * single {@code AND}.
+     */
+    @Query(value = """
+            SELECT a.* FROM auctions a
              WHERE (:status IS NULL OR a.status = :status)
-               AND (:categoryId IS NULL OR a.categoryId = :categoryId)
-            """)
+               AND (:categoryId IS NULL OR a.category_id = :categoryId)
+               AND (:q IS NULL OR a.search_vector @@ plainto_tsquery('english', :q))
+            """,
+            countQuery = """
+            SELECT count(*) FROM auctions a
+             WHERE (:status IS NULL OR a.status = :status)
+               AND (:categoryId IS NULL OR a.category_id = :categoryId)
+               AND (:q IS NULL OR a.search_vector @@ plainto_tsquery('english', :q))
+            """,
+            nativeQuery = true)
     Page<AuctionJpaEntity> search(
             @Param("status") String status,
             @Param("categoryId") UUID categoryId,
+            @Param("q") String q,
             Pageable pageable);
 
     /**
