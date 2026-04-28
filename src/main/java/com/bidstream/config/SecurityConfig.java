@@ -67,6 +67,8 @@ public class SecurityConfig {
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/auctions/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auctions").hasAuthority("ROLE_SELLER")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/categories").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/categories").hasAuthority("ROLE_ADMIN")
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterAfter(new RateLimitFilter(rateLimiter, objectMapper), JwtAuthenticationFilter.class);
