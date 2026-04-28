@@ -33,6 +33,11 @@ public class AuctionService {
                 .map(AuctionMapper::toDomain);
     }
 
+    /** PDR §14.4 {@code GET /me/watching}: every auction the caller has watched, all statuses. */
+    public Page<AuctionItem> watchedByUser(UUID userId, Pageable pageable) {
+        return listingRepository.findWatchedByUser(userId, pageable).map(AuctionMapper::toDomain);
+    }
+
     @Transactional
     public AuctionItem create(UUID sellerId, UUID categoryId, String title, String description,
                                Money startingPrice, Money reservePrice, Money minIncrement,
