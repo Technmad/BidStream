@@ -1,0 +1,56 @@
+# Locks down the bidstream pod's traffic to what it actually needs (PDR §23.2 hardening).
+#
+# Egress targets Postgres/Redis/Kafka by ipBlock+port rather than namespaceSelector+podSelector:
+# per k8s/README.md ("Postgres, Redis, and Kafka themselves aren't manifested here - this app is
+# stateless and assumes managed or separately-operated instances of each"), those dependencies run
+# outside this cluster (RDS/Cloud SQL, ElastiCache/MemoryStore, MSK/Confluent Cloud, or your own
+# StatefulSets elsewhere) - docker/docker-compose.yml only stands in for them locally. Since their
+# real addresses vary per environment and aren't recorded anywhere in k8s/, egress is opened to
+# 0.0.0.0/0 restricted to just their ports; if/when Postgres/Redis/Kafka move in-cluster, replace
+# these ipBlock rules with namespaceSelector+podSelector scoped to their actual namespace/labels.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bidstream
+spec:
+  podSelector:
+    matchLabels:
+      app: bidstream
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only the Service's target port (k8s/deployment.yaml containerPort 8080) is reachable -
+    # no `from` restriction since the Service is ClusterIP and callers may be any in-cluster
+    # client (or an Ingress/gateway not yet manifested here).
+    - ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # DNS - required for the app to resolve the external Postgres/Redis/Kafka hostnames below.
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Postgres (SPRING_DATASOURCE_URL in k8s/configmap-and-hpa.yaml, default port 5432).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Redis (SPRING_DATA_REDIS_PORT in k8s/configmap-and-hpa.yaml, default port 6379).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Kafka (SPRING_KAFKA_BOOTSTRAP_SERVERS in k8s/configmap-and-hpa.yaml, default port 9092).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 9092

@@ -14,9 +14,16 @@ spec:
       labels:
         app: bidstream
     spec:
+      # No numeric UID/GID is pinned in docker/Dockerfile (`addgroup -S bidstream` / `adduser -S
+      # bidstream`), so we rely on the image's own non-root USER plus runAsNonRoot below to reject
+      # it if that ever regresses to root, rather than hardcoding a UID that may not match.
+      securityContext:
+        runAsNonRoot: true
       containers:
         - name: bidstream
-          image: bidstream:latest
+          # CI/CD MUST substitute this with an immutable tag or digest (e.g. the release semver or
+          # `bidstream@sha256:...`) at deploy time - never actually deploy the literal tag below.
+          image: bidstream:0.1.0-SNAPSHOT
           ports:
             - containerPort: 8080
           envFrom:
@@ -31,6 +38,17 @@ spec:
             limits:
               cpu: "2"
               memory: 1536Mi
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # Embedded Tomcat writes its work dir under java.io.tmpdir (/tmp) even with no JSPs/
+          # uploads configured, which needs to stay writable despite readOnlyRootFilesystem above.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           # PDR §20: liveness/readiness backed by DB/Kafka/Redis health indicators, not just
           # "the JVM is up" - a broker/DB outage must take the pod out of rotation.
           livenessProbe:
@@ -52,6 +70,9 @@ spec:
               exec:
                 command: ["sh", "-c", "sleep 5"]
       terminationGracePeriodSeconds: 30
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
