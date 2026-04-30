@@ -1,0 +1,8 @@
+version: 2
+
+updates:
+  # Gradle (Kotlin DSL) dependencies - build.gradle.kts / settings.gradle.kts.
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -39,3 +39,22 @@ jobs:
       - name: Tear down the stack
         if: always()
         run: docker compose -f docker/docker-compose.yml down -v
+
+  # Informational-only vulnerability scan of dependencies and IaC/config files. Not gating merges
+  # yet - continue-on-error keeps this from blocking the build while we baseline how clean the
+  # existing dependency tree is. Trivy is used over the OWASP Dependency-Check Gradle plugin
+  # because it needs no NVD API key/secrets to wire in and runs as a standalone job.
+  vulnerability-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: '0'

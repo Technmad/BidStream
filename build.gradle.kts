@@ -2,6 +2,7 @@ plugins {
     java
     id("org.springframework.boot") version "3.3.4"
     id("io.spring.dependency-management") version "1.1.6"
+    id("com.github.spotbugs") version "6.0.26"
 }
 
 group = "com.bidstream"
@@ -73,4 +74,19 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+}
+
+// Basic static analysis. Report-only for now (ignoreFailures + low effort/high reportLevel
+// threshold) so it surfaces findings in CI output without gating the build on issues in the
+// existing codebase that haven't been triaged yet.
+spotbugs {
+    ignoreFailures.set(true)
+    effort.set(com.github.spotbugs.snom.Effort.DEFAULT)
+    reportLevel.set(com.github.spotbugs.snom.Confidence.HIGH)
+}
+
+tasks.withType<com.github.spotbugs.snom.SpotBugsTask> {
+    reports.create("html") {
+        required.set(true)
+    }
 }
