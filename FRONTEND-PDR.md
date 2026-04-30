@@ -4,12 +4,14 @@
 |---|---|
 | **Project name** | BidStream Web Client — the reference frontend for the Real-Time Auction Platform |
 | **Document type** | Project Design Requirements / Technical Design Document |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Draft for build |
-| **Target stack** | React 18 + TypeScript (Vite), TanStack Query, `@stomp/stompjs`, Zustand, Tailwind + shadcn/ui |
+| **Target stack** | Next.js 14+ (App Router, TypeScript), TanStack Query, `@stomp/stompjs`, Zustand, Tailwind + shadcn/ui |
 | **Backend contract** | `PDR-RealTimeAuctionPlatform.md` v1.5 — REST + WebSocket surface verified against the running code, not the PDR's memory of itself (see §4) |
 
 > **Companion document, not a rewrite.** This PDR assumes the backend PDR's vocabulary (auction lifecycle, `occurredAt`, the outbox, the tick) without re-deriving it. Where this document says "the backend guarantees X," that guarantee has been independently verified against the running code — see §4 for the citation trail.
+
+**v1.2 revision note — framework swap, Vite/CSR-only React to Next.js App Router.** Everything about the reconciliation rule (§8), the connection manager (§7), and the clock-offset module (§10) is unchanged — those are transport/state-layer decisions, orthogonal to which framework renders the page. What changes: §2.2's non-goal against SSR is narrowed rather than dropped (§5.2 — SSR is now used for public, unauthenticated listing pages only, never for anything behind the live WebSocket boundary); §5 restates the stack and adds §5.2 on the server/client component split; §7.1 gains an explicit SSR-safety rule (the connection manager must never execute during server render); §12.1/§12.2 note which parts of each screen are server- vs client-rendered; §12.5 revisits token storage under Next's server/client boundary; §17 is rewritten for the App Router's file-system routing; §19 gains a new risk row for hydration/SSR mistakes. Nothing in §8/§9/§10/§11 (the reconciliation, connection-lifecycle, clock-offset, and tick-coalescing designs) required any change — confirmation that those were specified at the right layer of abstraction in v1.1, independent of the rendering framework.
 
 **v1.1 revision note.** An external staff-level review of v1.0 found one gate-worthy gap and several smaller ones, all addressed below: §4.2/§8.3 now enforce strict `version` monotonicity instead of an unresolvable "freshest by timestamp" (the backend gained a matching `version` field in its own v1.5, tracked precisely as *specified, not yet independently re-verified* until that backend work ships — see the inline note in §4.2); §9 now states that a terminal REST `status` on resync overrides a possibly-missed one-shot `AUCTION_ENDED` frame; §10.1's code sample no longer contradicts its own prose about a one-way clock estimate; §12.1 resolves the winner-masking/leaderboard-identity inconsistency the review caught, against the backend's own now-explicit position that it doesn't pseudonymize identity anywhere.
 
@@ -49,7 +51,7 @@ This PDR specifies requirements, architecture, the state/data model, the WebSock
 
 ### 2.2 Non-Goals (v1)
 
-- **Server-side rendering / SEO.** A CSR SPA is the right tradeoff here (§5.1) — the interesting surface area is the live bid widget, not indexable listing pages. Revisit only if organic discovery of listings becomes a real product goal, matching the backend's own "don't build ahead of a demonstrated need" discipline (backend PDR §20).
+- **SSR/SEO for anything behind the live WebSocket boundary.** The Live Auction Room's bid form, connection state, and ticking price are client-rendered only, full stop (§5.2) — there is no server-rendered "current price" that could ever be momentarily stale or, worse, mistaken for confirmed state. Next.js is adopted for its routing/tooling and to give the public Browse/listing surface real SSR (§5.2), not to server-render the live parts of the app — that would reintroduce exactly the "which state is truth" problem §8 exists to prevent, at a new layer.
 - **Native mobile apps.** Explicitly out of scope on the backend side too (backend PDR §2.2); this is a responsive web client.
 - **Offline support.** An auction is inherently a live, connected activity — there is no meaningful "offline bid."
 - **Multi-currency / i18n.** The backend is USD-only today (`AuctionController` hardcodes `Currency.getInstance("USD")`); the frontend matches that scope rather than building UI for a currency selector nothing behind it supports.
@@ -179,8 +181,8 @@ type BidResult = {
 
 | Concern | Choice | Why |
 |---|---|---|
-| Framework | **React 18 + TypeScript, Vite** | CSR SPA (§2.2/§5.1) fits a live-data-heavy app better than SSR; Vite for fast local iteration. |
-| Server-state (REST) | **TanStack Query** | Caching, request dedup, and refetch-on-reconnect (§9) are exactly its job. Deliberately **not** used to hold live WebSocket data — see §5.1. |
+| Framework | **Next.js 14+, App Router, TypeScript** | File-system routing and a real dev/build/lint toolchain out of the box, plus genuine SSR where it actually earns its cost — the public Browse and individual-auction-detail pages (§5.2) — without server-rendering anything that touches the live WebSocket state (§2.2). |
+| Server-state (REST) | **TanStack Query**, hydrated from a Server Component's initial fetch on the pages that use one (§5.2) | Caching, request dedup, and refetch-on-reconnect (§9) are exactly its job on the client. Deliberately **not** used to hold live WebSocket data — see §5.1. |
 | Live-channel transport | **`@stomp/stompjs`**, wrapped in a hand-written connection manager (§7) | It's a thin, well-maintained STOMP client; the value-add this project needs (typed contracts, reconnect policy, resubscription, resync) is deliberately hand-rolled rather than assumed to exist in a library. |
 | Client-only state | **Zustand** | Connection status, clock offset, and the pending-bid overlay are small, don't need Redux's ceremony, and benefit from selectors that don't re-render unrelated components. |
 | UI components | **Tailwind + shadcn/ui** | Effort goes into behavior (the hard parts below), not bespoke CSS or a component library evaluation. |
@@ -189,6 +191,14 @@ type BidResult = {
 ### 5.1 Why not route live data through TanStack Query's cache
 
 It's tempting — Query already has a cache and a subscription model. It's wrong here for a specific reason: Query's mental model is *request → response → cache entry*, invalidated and refetched. A `PRICE_UPDATE` isn't a response to a request; it's a push with no request behind it, arriving on an independent cadence (the tick, not a query's own refetch interval). Forcing it through `queryClient.setQueryData` on every tick works, but it means the one place your app's live-data invariants live is a generic cache API that doesn't know anything about STOMP reconnects, clock offsets, or pending-bid overlays. **Confirmed state (via Query, from REST) and live state (via the connection manager, from WebSocket) are kept in two explicitly different places, merged by one explicit layer (§8) — not blended into one cache and hoped to stay consistent.**
+
+### 5.2 The server/client component split — where SSR is and is not used
+
+Next.js draws a real line between Server Components (render on the server, no `useState`/`useEffect`/browser APIs, can `fetch` directly) and Client Components (`"use client"`, hydrated in the browser, the only place `WebSocket`, `localStorage`, Zustand hooks, or `@stomp/stompjs` may run). This PDR's rule for which side of that line each piece falls on:
+
+- **Server Components, with SSR:** the outer shell of Browse/Listings (§12.2) and the individual auction-detail page (§12.1) — both hit public, unauthenticated GETs (`GET /auctions`, `GET /auctions/{id}` per §4.1's auth column) with no token required, so there's nothing about them that *can't* run server-side. The initial payload is fetched server-side, rendered to HTML (real SEO/fast first paint for a shared auction link), and — for the pieces that need to stay reactive on the client (filters, pagination, the live price once mounted) — dehydrated into a TanStack Query cache that the client-side tree hydrates from, via `HydrationBoundary` (Next.js's documented TanStack Query pattern), so the client doesn't immediately re-fetch what the server just rendered.
+- **Client Components, no SSR, ever:** the connection manager (§7), everything in `state/` (§8.2), `useReconciledAuction` (§8.3), the countdown (§10), and the bid form itself. These are marked `"use client"` at their module boundary and mounted only after hydration — see §7.1's SSR-safety rule. The server-rendered auction detail page's initial price/status *is* the first confirmed state fed into `useReconciledAuction` (§8.3) — not a separate, throwaway render — so there is no flash-then-replace between the SSR'd number and the first client-side value.
+- **Always client-only, unconditionally:** anything behind auth — My Activity (§12.3), Sell (§12.4), and the bid/watch/auto-bid actions themselves — because the access token lives in memory on the client only (§12.5), and there is deliberately no server-side session to render those against.
 
 ---
 
@@ -234,6 +244,7 @@ This is the highest-risk piece, and the one this document specifies in the most 
 
 A single module, instantiated once, outside React's render tree (a plain singleton or a context provider that never re-creates it):
 
+0. **SSR-safety, non-negotiable (new in v1.2):** this module is `"use client"` and must never construct a STOMP connection — or reference `window`/`WebSocket` at all — during server render. The singleton is created lazily on first use inside a `useEffect` (or a client-only provider mounted below the app's root layout), never at module-eval time, since Next.js can import client modules during the server-side render pass even though it won't execute their browser-only effects. Getting this wrong doesn't fail loudly — it throws `ReferenceError: WebSocket is not defined` during the server render of any page that imports the manager transitively, which is why no Server Component (§5.2) may import from `ws/` or `state/` even indirectly.
 1. Owns exactly one STOMP connection.
 2. Maintains a **subscription registry**: `Map<destination, Set<callback>>`. Components subscribe/unsubscribe via a hook (`useAuctionChannel(auctionId)`); the manager only actually sends a STOMP `SUBSCRIBE` frame the first time any component asks for a given destination, and only sends `UNSUBSCRIBE` when the last one stops asking — reference-counted, not per-component.
 3. Parses every inbound frame against the typed contracts in §4.2 and fans it out only to callbacks registered for that exact destination.
@@ -390,6 +401,8 @@ Each screen names its exact data sources so there is never a gap between "what t
 
 **Purpose:** everything FE-4, FE-6, FE-7, FE-10 need in one place.
 
+**Rendering (v1.2):** the route (`app/auctions/[id]/page.tsx`) is a Server Component that does the initial `GET /auctions/{id}` fetch for SSR (fast first paint, a shareable/crawlable auction URL) and dehydrates it into TanStack Query per §5.2; every interactive piece below — the live price, the bid form, the countdown, the connection indicator — is a Client Component tree mounted underneath it, per §7.1's SSR-safety rule. The bid history and leaderboard panels can be either, but default to client-fetched since they're not the page's SEO-relevant content and gain little from SSR.
+
 **Data sources:** `GET /auctions/{id}` (initial paint + resync), `GET /auctions/{id}/bids` (history panel), `GET /auctions/{id}/leaderboard` (optional top-bidders widget — a real endpoint the earlier frontend planning discussion hadn't accounted for), `/topic/auctions/{id}` (live), `/user/queue/notifications` (this user's own bid outcomes).
 
 **Must show:** current price, high bidder, server-synced countdown (§10), the bid form with its full pending/confirmed/rejected/outbid state machine (§8), a visible connection indicator (§9), and an unmissable, distinct visual moment for `AUCTION_EXTENDED` (the anti-snipe mechanic is otherwise invisible — this is the one moment in the whole app worth a deliberate animation, not because it's decorative but because it's the single UI moment that actually explains *why* the auction didn't end when the countdown seemed to say it would).
@@ -402,6 +415,8 @@ Each screen names its exact data sources so there is never a gap between "what t
 - **Decision for v1: (b), with the explicit label distinction.** It's a strictly better user experience than (a) for near-zero cost, as long as the UI is honest that it's a local memory, not a server fact — the same "never let an approximation masquerade as the truth" principle as §8.1, applied to a smaller stake.
 
 ### 12.2 Browse / Listings
+
+**Rendering (v1.2):** `app/auctions/page.tsx` is a Server Component doing the initial `GET /auctions?...` fetch (query params from the URL's search params, so a filtered/sorted Browse URL is itself shareable and SSR's correctly), dehydrated into TanStack Query. Filter/sort controls, pagination, and the per-card live subscriptions are Client Components hydrating from that same initial data — no separate client-side re-fetch of what the server already rendered.
 
 **Data sources:** `GET /auctions?status=&category=&q=&sort=` (REST, paginated), `GET /categories` (filter chips), then `/topic/auctions/{id}` for every auction currently rendered on screen (subscribed on mount, unsubscribed on scroll-out or unmount, via the reference-counted registry in §7.1 — a card that's been paginated away stops costing anything).
 
@@ -420,6 +435,8 @@ Each screen names its exact data sources so there is never a gap between "what t
 ### 12.5 Auth
 
 Standard login/register forms against `/auth/login`, `/auth/register`. Token storage: access token in memory (a module-level variable or a React context, **not** `localStorage`, to reduce XSS exposure of a live bearer token); refresh token in an `httpOnly` cookie if the backend is ever extended to set one, or in `localStorage` as a pragmatic fallback today since the backend currently returns it as a plain JSON field with no cookie mechanism — noted here as a real gap between "best practice" and "what the backend actually gives the frontend to work with," not silently upgraded past what's real.
+
+**Consequence of this under Next.js (v1.2):** an in-memory client token is, by construction, invisible to the server render — so no Server Component can ever fetch on a logged-in user's behalf, which is exactly why §5.2 keeps every authenticated screen (My Activity, Sell, the bid/watch/auto-bid actions) client-only rather than attempting a "logged-in SSR" that this token strategy structurally cannot support. This was a deliberate, not an accidental, scope line: building real server-side sessions (e.g. an `httpOnly` cookie plus a Next.js Route Handler or middleware that reads it) would let those screens SSR too, but that's new backend-facing surface area, not a rendering-framework change — tracked in §20, not undertaken here.
 
 ---
 
@@ -442,13 +459,15 @@ Standard login/register forms against `/auth/login`, `/auth/register`. Token sto
 
 | Level | Tools | What it covers |
 |---|---|---|
-| Unit | Vitest | The clock-offset module (§10) in isolation — feed it synthetic samples, assert the median-of-5 smoothing and the "before first sample" fallback; the reconciliation merge function (§8.3) as a pure function of (confirmed, pending, incoming message) → next state, with no React or network involved. |
+| Unit | Vitest (`@vitejs/plugin-react` config works unchanged under Next.js — the App Router doesn't require `next/jest`) | The clock-offset module (§10) in isolation — feed it synthetic samples, assert the median-of-5 smoothing and the "before first sample" fallback; the reconciliation merge function (§8.3) as a pure function of (confirmed, pending, incoming message) → next state, with no React or network involved. |
 | Component | Vitest + React Testing Library | The bid form's full state machine (idle → submitting → pending → accepted/rejected/timed-out), driven by mocking the reconciliation hook's output directly rather than a real connection. |
 | Integration | A mock STOMP broker (`@stomp/stompjs` supports a local in-memory broker for exactly this) | Scripted message sequences: a tick immediately followed by an `AUCTION_ENDED` (does the final-push guarantee actually short-circuit the tick-based render?), an `OUTBID` arriving while a pending bid is in flight, a simulated disconnect mid-bid followed by reconnect (does resync — §7.4 — correctly reconcile whatever changed while disconnected?). |
 | E2E | **Playwright, against the real local backend stack** (`docker compose up`, matching backend ADR-0003's own reasoning for testing against the real thing rather than a simulation wherever the risk actually justifies it) | The one true end-to-end path: register → create an auction → bid → see the WebSocket-delivered result — proving the frontend and the *actual* backend agree on the contract, not just on a mock of it. |
 | Accessibility | `axe-core` in CI against key screens | Live-region behavior (§15) doesn't regress silently. |
 
 **Deliberately not built:** a broad snapshot-test suite across every component. Snapshot tests are cheap to write and expensive to maintain, and they don't test any of the behavior that's actually risky here (timing, reconciliation, reconnection) — testing effort goes where the backend's own testing effort went: at the specific, named hard parts, not at coverage-percentage for its own sake.
+
+**New in v1.2 — Server Component data-fetching gets a thin, separate check.** The Server Components in §5.2 (Browse and auction-detail's initial fetch) are plain `async function` components calling `fetch` directly, not hooks — they're exercised by the same Playwright E2E suite (does the SSR'd page actually contain the right price/title in its initial HTML, verified via `page.goto()` + immediate content assertion before hydration finishes?) rather than a separate unit-test tier invented just for them. No new test tooling is introduced for this; it rides the E2E suite that already has to run against the real backend anyway.
 
 ---
 
@@ -475,23 +494,43 @@ No numbers are asserted here in their place — an aspirational performance clai
 
 ## 17. Project Structure
 
+**v1.2 — restructured for the Next.js App Router.** Routing is now file-system-driven (`app/`); everything that was framework-agnostic in v1.1 (`ws/`, `state/`, `reconciliation/`) is unchanged in substance and just relocated under `src/`, each file carrying the `"use client"` directive per §5.2/§7.1 where required.
+
 ```
 frontend/
+├── app/
+│   ├── layout.tsx                 # root layout — mounts the QueryClient provider and the
+│   │                               #   client-only connection-manager provider (§7.1)
+│   ├── auctions/
+│   │   ├── page.tsx                # §12.2 Browse — Server Component, initial SSR fetch (§5.2)
+│   │   └── [id]/
+│   │       └── page.tsx            # §12.1 Live Auction Room — Server Component shell,
+│   │                               #   Client Component tree for everything live (§5.2)
+│   ├── me/
+│   │   ├── bids/page.tsx           # §12.3 My Bids — client-only (§12.5)
+│   │   └── watching/page.tsx       # §12.3 Watching — client-only
+│   ├── sell/
+│   │   ├── page.tsx                # §12.4 My Listings — client-only
+│   │   └── new/page.tsx            # §12.4 Create Auction — client-only
+│   └── (auth)/
+│       ├── login/page.tsx
+│       └── register/page.tsx
 ├── src/
-│   ├── api/                 # REST client + generated/hand-typed request/response types (§4.1)
+│   ├── api/                 # REST client + generated/hand-typed request/response types (§4.1);
+│   │                        #   used from both Server Components (direct fetch) and client hooks
 │   ├── ws/
-│   │   ├── connectionManager.ts   # §7 — the singleton, outside React
+│   │   ├── connectionManager.ts   # §7 — "use client", the singleton, lazily constructed (§7.1)
 │   │   ├── contracts.ts           # §4.2 — every typed message shape, one source of truth
 │   │   └── useAuctionChannel.ts   # the subscribe/unsubscribe hook components use
 │   ├── state/
-│   │   ├── connectionStore.ts     # §9 — Zustand
+│   │   ├── connectionStore.ts     # §9 — Zustand, "use client"
 │   │   ├── clockOffset.ts         # §10 — pure functions + a small store wrapper
 │   │   └── pendingBids.ts         # §8.2
 │   ├── reconciliation/
-│   │   └── useReconciledAuction.ts # §8.3 — the one merge point
+│   │   └── useReconciledAuction.ts # §8.3 — the one merge point, "use client"
 │   ├── features/
-│   │   ├── auction-room/
-│   │   ├── browse/
+│   │   ├── auction-room/     # Client Components consumed by app/auctions/[id]/page.tsx
+│   │   ├── browse/           # Client Components (filters, live cards) consumed by app/auctions/page.tsx
 │   │   ├── my-activity/
 │   │   ├── sell/
 │   │   └── auth/
@@ -500,7 +539,7 @@ frontend/
 │       ├── mockBroker.ts     # §14's integration-test harness
 │       └── ...
 ├── e2e/                      # Playwright, against the real stack (§14.4)
-└── vite.config.ts
+└── next.config.ts
 ```
 
 ---
@@ -509,7 +548,7 @@ frontend/
 
 | Phase | Deliverable | Why this order |
 |---|---|---|
-| **0 — Foundation** | Vite/React/TS scaffold, auth flow (login/register/token storage/refresh), REST client with the verified contracts (§4.1) wired to TanStack Query. | Nothing else works without being able to log in and fetch data; this phase has zero real-time risk, so it's the cheapest place to get tooling right first. |
+| **0 — Foundation** | Next.js App Router scaffold (§17), the root layout's client-only provider boundary (§7.1) established from day one, auth flow (login/register/token storage/refresh), REST client with the verified contracts (§4.1) wired to TanStack Query, one throwaway Server Component page proving the SSR + `HydrationBoundary` pattern (§5.2) actually works end-to-end before anything real depends on it. | Nothing else works without being able to log in and fetch data; this phase has zero real-time risk, so it's the cheapest place to get tooling *and* the server/client boundary right first — getting the SSR boundary wrong is far cheaper to fix here than after Phase 2 has built a screen on top of it. |
 | **1 — The WebSocket + reconciliation core** | The connection manager (§7), the typed contracts (§4.2), the reconciliation layer (§8), the connection lifecycle FSM (§9), the clock-offset module (§10) — all unit/integration tested per §14, with **no UI built on top of them yet.** | This is the highest-risk, hardest-to-retrofit piece. Building it in isolation, fully tested against a mock broker, before a single screen depends on it, is the direct analogue of the backend building and proving its failover/replay correctness (backend PDR §22's must-have tests) before layering features on top. |
 | **2 — Live Auction Room** | The centerpiece screen (§12.1), built entirely on Phase 1's primitives. | Proves Phase 1 actually works under a real UI, on the single highest-value screen, before spreading effort across the rest of the app. |
 | **3 — Browse + tick coalescing under real load (§11)** | Listings, filters, search, category chips, multiple simultaneous live subscriptions. | The first screen where coalescing actually matters — validates §11 isn't just a paragraph in a design doc. |
@@ -528,6 +567,7 @@ frontend/
 | Building UI around an assumed backend endpoint that doesn't exist | §4 exists specifically to prevent this — every data dependency in §12 cites its exact source, verified against running code, not the backend PDR's prose. |
 | Reaching for `?wait=true` "just to simplify" under deadline pressure | Named and refused explicitly in §4.1 and §8.4, with the reasoning stated, not just the rule — so a future contributor understands *why* before they consider reversing it. |
 | Scope creep into SSR/i18n/native/offline "since we're already doing this properly" | §2.2's non-goals name each one and the specific reasoning against it now, before the temptation arrives mid-build. |
+| SSR/hydration mistakes (v1.2): a Server Component accidentally imports something from `ws/`/`state/` transitively, crashing server render; or a hydration mismatch between the server-rendered initial price and the client's first reconciled value | §5.2/§7.1's explicit server/client boundary rules, plus the requirement that the SSR'd initial fetch *is* `useReconciledAuction`'s first confirmed state (§12.1) rather than a second, independent render that could disagree with it. |
 
 ---
 
@@ -536,8 +576,8 @@ frontend/
 - A backend `GET` for a user's own auto-bid — would upgrade §12.1's workaround (b) to a real fact instead of a labeled local memory. Worth proposing as a small backend PDR addition once the frontend need is felt in practice, following the same pattern that closed the watch/category/search gaps.
 - Server-sent `retryAfterMs` on `429` — would let §13's rate-limit message become an actual countdown instead of "please slow down."
 - Admin category-management UI — deferred per §2.2, revisit if category curation via Swagger/raw requests becomes a real workflow friction point.
-- SSR for Browse/listing pages, if organic/SEO discovery ever becomes a real product goal (§2.2) — not before.
+- Server-side sessions (an `httpOnly` cookie + Next.js middleware/Route Handler reading it) to let authenticated screens SSR too — a real backend-facing change (§12.5), not something the v1.2 framework swap alone provides; only worth it if My Activity/Sell's first-paint latency becomes a measured problem, not preemptively.
 
 ---
 
-*End of FRONTEND-PDR v1.0 — BidStream Web Client. Read alongside `PDR-RealTimeAuctionPlatform.md` v1.4.*
+*End of FRONTEND-PDR v1.2 — BidStream Web Client. Read alongside `PDR-RealTimeAuctionPlatform.md` v1.5.*
