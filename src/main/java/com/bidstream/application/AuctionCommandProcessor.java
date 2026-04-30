@@ -5,6 +5,7 @@ import com.bidstream.adapter.messaging.dto.AuctionEndedEvent;
 import com.bidstream.adapter.messaging.dto.BidCommand;
 import com.bidstream.adapter.messaging.dto.BidRejectedEvent;
 import com.bidstream.adapter.messaging.dto.CloseCommand;
+import com.bidstream.adapter.messaging.dto.SetAutoBidCommand;
 import com.bidstream.adapter.out.persistence.jdbc.BidIdempotencyKeyJdbcRepository;
 import com.bidstream.adapter.out.persistence.jdbc.OutboxJdbcRepository;
 import com.bidstream.adapter.out.persistence.jdbc.ProcessedEventJdbcRepository;
@@ -12,6 +13,7 @@ import com.bidstream.adapter.out.persistence.jdbc.ProcessedEventRecord;
 import com.bidstream.adapter.out.persistence.jdbc.SettlementJdbcRepository;
 import com.bidstream.common.NotFoundException;
 import com.bidstream.domain.model.AuctionItem;
+import com.bidstream.domain.model.AuctionStatus;
 import com.bidstream.domain.model.AutoBid;
 import com.bidstream.domain.model.BidOutcome;
 import com.bidstream.domain.model.BidRejectReason;
@@ -229,6 +231,102 @@ public class AuctionCommandProcessor {
             writeOutboxEvent(cmd.auctionId(), AUCTIONS_EVENTS_TOPIC, new AuctionEndedEvent(
                     cmd.eventId(), BidCommand.CURRENT_SCHEMA_VERSION, cmd.auctionId(), outcomeName,
                     winnerId, finalPrice, auction.version(), cmd.occurredAt(), cmd.correlationId()));
+        } catch (RuntimeException ex) {
+            workingSet.evict(cmd.auctionId());
+            throw ex;
+        }
+    }
+
+    /**
+     * Resolves a just-set auto-bid (PDR §12.1, ADR-0002) as a challenger against whatever
+     * currently leads (another auto-bid, or nobody) - the same resolution
+     * {@link #maybeResolveAutoBid} performs when a manual bid triggers it, but here the auto-bid
+     * itself is the triggering event. The standing {@code auto_bids} row was already saved by
+     * {@code AutoBidService} before this command was published; only the auction aggregate
+     * mutation (price/winner/version) happens here, on the single writer for this partition, so
+     * it can never race a concurrent manual bid's optimistic-lock write.
+     */
+    @Transactional
+    public void processSetAutoBid(SetAutoBidCommand cmd) {
+        Optional<ProcessedEventRecord> alreadyProcessed = processedEventRepository.findById(cmd.eventId());
+        if (alreadyProcessed.isPresent()) {
+            log.info("Replaying stored outcome for SET_AUTO_BID eventId={} (already processed)", cmd.eventId());
+            replaysCounter.increment();
+            reassertRedisProjection(cmd.auctionId(), alreadyProcessed.get());
+            return;
+        }
+
+        try {
+            AuctionItem auction = workingSet.getOrSeed(cmd.auctionId(), () -> seedFromCommittedPostgres(cmd.auctionId()));
+
+            if ((auction.status() != AuctionStatus.OPEN && auction.status() != AuctionStatus.EXTENDED)
+                    || auction.sellerId().equals(cmd.bidderId())) {
+                // The standing instruction is already saved; it just doesn't get to resolve
+                // against a closed auction or the seller's own listing - nothing else to do.
+                processedEventRepository.insertIfAbsent(new ProcessedEventRecord(
+                        cmd.eventId(), cmd.auctionId(), "REJECTED", "AUCTION_NOT_OPEN_OR_SELF_BID",
+                        null, null, cmd.occurredAt()));
+                return;
+            }
+
+            long expectedVersion = auction.version();
+            Money priceBeforeThisEvent = auction.currentPrice();
+            Money maxAmount = Money.of(cmd.maxAmount(), Currency.getInstance(cmd.currency()));
+
+            List<AutoBid> otherActive = autoBidRepository.findActiveByAuctionId(cmd.auctionId()).stream()
+                    .filter(ab -> !ab.bidderId().equals(cmd.bidderId()))
+                    .toList();
+            AutoBid existingLeader = otherActive.stream()
+                    .max((a, b) -> {
+                        int cmp = a.maxAmount().compareTo(b.maxAmount());
+                        return cmp != 0 ? cmp : b.createdAt().compareTo(a.createdAt());
+                    })
+                    .orElse(null);
+
+            AutoBidResolver.Leader leader = existingLeader == null ? null
+                    : new AutoBidResolver.Leader(existingLeader.bidderId(), existingLeader.maxAmount(),
+                            existingLeader.createdAt());
+            var resolutionOpt = AutoBidResolver.resolve(priceBeforeThisEvent, auction.minIncrement(), leader,
+                    new AutoBidResolver.Challenger(cmd.bidderId(), maxAmount, cmd.autoBidCreatedAt()));
+            if (resolutionOpt.isEmpty()) {
+                // The auto-bid's max doesn't clear the floor to win anything yet - nothing else
+                // to do, but still recorded so a redelivery replays this same no-op.
+                processedEventRepository.insertIfAbsent(new ProcessedEventRecord(
+                        cmd.eventId(), cmd.auctionId(), "NO_OP", null, null, null, cmd.occurredAt()));
+                return;
+            }
+            AutoBidResolver.Resolution resolution = resolutionOpt.get();
+
+            // Also skip if this bidder is already exactly where they'd resolve to (idempotent re-set).
+            if (resolution.winnerId().equals(auction.currentWinnerId())
+                    && resolution.price().equals(priceBeforeThisEvent)) {
+                processedEventRepository.insertIfAbsent(new ProcessedEventRecord(
+                        cmd.eventId(), cmd.auctionId(), "NO_OP", null, null, null, cmd.occurredAt()));
+                return;
+            }
+
+            BidOutcome.Accepted accepted = auction.applyResolvedBid(resolution.winnerId(), resolution.price(),
+                    cmd.occurredAt());
+
+            boolean persisted = auctionRepository.saveWithOptimisticLock(auction, expectedVersion);
+            if (!persisted) {
+                // Should not happen under true single-writer-per-partition; treat as a signal to
+                // reseed and let Kafka redeliver rather than silently diverging from Postgres.
+                workingSet.evict(cmd.auctionId());
+                throw new IllegalStateException(
+                        "Optimistic-lock conflict resolving auto-bid on auction " + cmd.auctionId()
+                                + " despite single-writer partitioning - reseeding for retry");
+            }
+            workingSet.put(cmd.auctionId(), auction);
+
+            acceptedBidPersister.persist(cmd.auctionId(), resolution.winnerId(), resolution.price().amount(),
+                    BidType.AUTO.name(), "auto:" + cmd.eventId(), cmd.occurredAt(), UUID.randomUUID(), accepted,
+                    cmd.eventId(), cmd.correlationId(), auction.version());
+
+            processedEventRepository.insertIfAbsent(new ProcessedEventRecord(
+                    cmd.eventId(), cmd.auctionId(), "ACCEPTED", null,
+                    accepted.newPrice().amount(), accepted.newWinnerId(), cmd.occurredAt()));
+            bidsAcceptedCounter.increment();
         } catch (RuntimeException ex) {
             workingSet.evict(cmd.auctionId());
             throw ex;
