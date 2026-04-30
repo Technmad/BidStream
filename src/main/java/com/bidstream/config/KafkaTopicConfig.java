@@ -1,9 +1,12 @@
 package com.bidstream.config;
 
 import org.apache.kafka.clients.admin.NewTopic;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.kafka.config.TopicBuilder;
 
 /**
@@ -16,21 +19,42 @@ import org.springframework.kafka.config.TopicBuilder;
  * structurally impossible regardless of the producer's own {@code acks=all} config
  * (application.yml). {@code bidstream.kafka.topic-replication-factor} now controls it; the
  * default of 1 keeps the local single-broker dev stack working exactly as before, but production
- * must set it to at least 3 against a real multi-broker cluster. {@code min.insync.replicas} is
- * derived from it rather than hardcoded, so the two can never drift apart into an invalid
- * combination.
+ * must set it to at least 3 against a real multi-broker cluster (see
+ * {@code BIDSTREAM_KAFKA_TOPIC_REPLICATION_FACTOR} in {@code k8s/configmap-and-hpa.yaml}).
+ * {@code min.insync.replicas} is derived from it rather than hardcoded, so the two can never drift
+ * apart into an invalid combination. Under the {@code prod} profile a value below the safe minimum
+ * fails startup fast instead of silently provisioning under-replicated topics.
  */
 @Configuration
 public class KafkaTopicConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(KafkaTopicConfig.class);
+
+    /** Below this under the {@code prod} profile, committed bids can't survive a broker loss. */
+    private static final int SAFE_MINIMUM_PROD_REPLICATION_FACTOR = 3;
+
     private final int replicationFactor;
     private final int minInsyncReplicas;
 
-    public KafkaTopicConfig(@Value("${bidstream.kafka.topic-replication-factor:1}") int replicationFactor) {
+    public KafkaTopicConfig(@Value("${bidstream.kafka.topic-replication-factor:1}") int replicationFactor,
+                             Environment environment) {
         this.replicationFactor = replicationFactor;
         // Never ask for more in-sync replicas than the topic even has; on a single-broker dev
         // stack (replicationFactor=1) this is 1, matching today's behavior exactly.
         this.minInsyncReplicas = Math.min(2, replicationFactor);
+
+        if (environment.matchesProfiles("prod") && replicationFactor < SAFE_MINIMUM_PROD_REPLICATION_FACTOR) {
+            log.error("bidstream.kafka.topic-replication-factor is {} under the 'prod' profile, "
+                    + "below the safe minimum of {} — min.insync.replicas can never be satisfied "
+                    + "and a single broker loss can lose committed bids. Set "
+                    + "BIDSTREAM_KAFKA_TOPIC_REPLICATION_FACTOR to at least {} "
+                    + "(k8s/configmap-and-hpa.yaml).",
+                    replicationFactor, SAFE_MINIMUM_PROD_REPLICATION_FACTOR, SAFE_MINIMUM_PROD_REPLICATION_FACTOR);
+            throw new IllegalStateException(
+                    "bidstream.kafka.topic-replication-factor=" + replicationFactor + " is below the "
+                            + "safe minimum of " + SAFE_MINIMUM_PROD_REPLICATION_FACTOR
+                            + " required under the 'prod' profile");
+        }
     }
 
     private TopicBuilder topic(String name, int partitions, java.time.Duration retention) {

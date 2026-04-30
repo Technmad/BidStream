@@ -8,7 +8,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Polls {@code idx_outbox_unpublished} and relays rows to Kafka at-least-once (PDR §10.3). Every
@@ -23,27 +24,44 @@ public class OutboxRelay {
 
     private final OutboxJdbcRepository outboxRepository;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private final TransactionTemplate transactionTemplate;
 
     public OutboxRelay(OutboxJdbcRepository outboxRepository,
-                        KafkaTemplate<String, String> kafkaTemplate) {
+                        KafkaTemplate<String, String> kafkaTemplate,
+                        PlatformTransactionManager transactionManager) {
         this.outboxRepository = outboxRepository;
         this.kafkaTemplate = kafkaTemplate;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
+    /**
+     * No class/method-level {@code @Transactional} here on purpose: the batch used to be fetched
+     * and every row marked published inside one long transaction that stayed open across up to
+     * BATCH_SIZE blocking {@code kafkaTemplate...get()} network round-trips, pinning a single
+     * Postgres connection for the whole poll. Instead the fetch below is its own short
+     * transaction (just long enough for the {@code FOR UPDATE SKIP LOCKED} read), each row's
+     * Kafka send happens with no transaction open at all, and only the row's own
+     * {@link #markPublished} commit is transactional - so a connection is never held across a
+     * Kafka round-trip.
+     */
     @Scheduled(fixedDelayString = "${bidstream.outbox.relay-interval-ms:500}")
-    @Transactional
     public void relay() {
-        List<OutboxRow> rows = outboxRepository.findUnpublished(BATCH_SIZE);
+        List<OutboxRow> rows = transactionTemplate.execute(status -> outboxRepository.findUnpublished(BATCH_SIZE));
         for (OutboxRow row : rows) {
             try {
-                // Synchronous send within the poll transaction: if Kafka is unreachable, the
+                // Synchronous send outside of any transaction: if Kafka is unreachable, the
                 // row stays unpublished (nothing marked) and is retried on the next tick.
                 kafkaTemplate.send(row.topic(), row.partitionKey(), row.payload()).get();
-                outboxRepository.markPublished(row.id());
+                markPublished(row.id());
             } catch (Exception e) {
                 log.error("Failed to relay outbox row id={} topic={} - will retry next tick",
                         row.id(), row.topic(), e);
             }
         }
+    }
+
+    /** Commits this single row's publish on its own, immediately after its Kafka send succeeds. */
+    private void markPublished(long id) {
+        transactionTemplate.executeWithoutResult(status -> outboxRepository.markPublished(id));
     }
 }

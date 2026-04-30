@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 
 /**
  * Supplies the RSA key pair used to sign/verify JWTs (RS256, PDR §17 — asymmetric so verifiers
@@ -26,6 +27,8 @@ import org.springframework.context.annotation.Configuration;
  * {@code public-key-pem} are configured (from a Secret shared across all replicas — see
  * {@code k8s/secret.example.yaml}), that fixed key pair is loaded instead. Falling back to an
  * ephemeral in-memory key pair when they're absent keeps local/single-instance dev friction-free.
+ * Under the {@code prod} profile, though, that fallback is disabled — startup fails fast instead,
+ * since an ephemeral per-instance key silently breaks cross-pod token verification.
  */
 @Configuration
 public class JwtKeyConfig {
@@ -34,17 +37,26 @@ public class JwtKeyConfig {
 
     private final String privateKeyPem;
     private final String publicKeyPem;
+    private final Environment environment;
 
     public JwtKeyConfig(@Value("${bidstream.jwt.private-key-pem:}") String privateKeyPem,
-                         @Value("${bidstream.jwt.public-key-pem:}") String publicKeyPem) {
+                         @Value("${bidstream.jwt.public-key-pem:}") String publicKeyPem,
+                         Environment environment) {
         this.privateKeyPem = privateKeyPem;
         this.publicKeyPem = publicKeyPem;
+        this.environment = environment;
     }
 
     @Bean
     public KeyPair jwtSigningKeyPair() {
         if (!privateKeyPem.isBlank() && !publicKeyPem.isBlank()) {
             return loadFromPem();
+        }
+        if (environment.matchesProfiles("prod")) {
+            throw new IllegalStateException(
+                    "bidstream.jwt.private-key-pem/public-key-pem must be configured under the "
+                            + "'prod' profile — an ephemeral per-instance key breaks token "
+                            + "verification across replicas and invalidates every session on restart.");
         }
         log.warn("bidstream.jwt.private-key-pem/public-key-pem not set — generating an ephemeral "
                 + "RSA key pair for this instance only. Fine for a single local instance; running "
