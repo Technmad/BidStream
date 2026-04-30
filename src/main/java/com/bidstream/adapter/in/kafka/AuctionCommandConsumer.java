@@ -2,6 +2,7 @@ package com.bidstream.adapter.in.kafka;
 
 import com.bidstream.adapter.messaging.dto.BidCommand;
 import com.bidstream.adapter.messaging.dto.CloseCommand;
+import com.bidstream.adapter.messaging.dto.SetAutoBidCommand;
 import com.bidstream.application.AuctionCommandProcessor;
 import com.bidstream.application.BidDecisionWaiter;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -13,7 +14,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * Consumer group {@code auction-processor} on {@code auction.commands} (PDR §10.4). Carries
- * both BID and CLOSE commands (PDR §11.3), so the value type here is {@code Object} - Spring's
+ * BID, CLOSE, and SET_AUTO_BID commands (PDR §11.3, §12.1, ADR-0002), so the value type here is
+ * {@code Object} - Spring's
  * JsonDeserializer resolves each record to its original producer class via the type header, and
  * this dispatches on the actual runtime type. Concurrency is set to the partition count so each
  * partition is owned by exactly one thread at a time (PDR §9.1).
@@ -55,6 +57,8 @@ public class AuctionCommandConsumer {
             }
         } else if (command instanceof CloseCommand closeCommand) {
             processor.processClose(closeCommand);
+        } else if (command instanceof SetAutoBidCommand setAutoBidCommand) {
+            processor.processSetAutoBid(setAutoBidCommand);
         } else {
             log.warn("Unsupported command type {} at offset={} - skipping",
                     command.getClass(), record.offset());
