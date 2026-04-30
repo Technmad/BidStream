@@ -7,6 +7,7 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.util.Base64;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
 
 /**
  * Pure unit test - no Spring context needed, this class is plain PEM parsing plus a fallback.
@@ -18,7 +19,7 @@ class JwtKeyConfigTest {
 
     @Test
     void withNoConfiguredKeysAnEphemeralPairIsGenerated() {
-        KeyPair keyPair = new JwtKeyConfig("", "").jwtSigningKeyPair();
+        KeyPair keyPair = new JwtKeyConfig("", "", new MockEnvironment()).jwtSigningKeyPair();
 
         assertThat(keyPair.getPublic()).isNotNull();
         assertThat(keyPair.getPrivate()).isNotNull();
@@ -30,8 +31,10 @@ class JwtKeyConfigTest {
         String privatePem = toPem("PRIVATE KEY", generated.getPrivate().getEncoded());
         String publicPem = toPem("PUBLIC KEY", generated.getPublic().getEncoded());
 
-        KeyPair first = new JwtKeyConfig(privatePem, publicPem).jwtSigningKeyPair();
-        KeyPair second = new JwtKeyConfig(privatePem, publicPem).jwtSigningKeyPair();
+        KeyPair first = new JwtKeyConfig(privatePem, publicPem, new MockEnvironment())
+                .jwtSigningKeyPair();
+        KeyPair second = new JwtKeyConfig(privatePem, publicPem, new MockEnvironment())
+                .jwtSigningKeyPair();
 
         assertThat(first.getPrivate()).isEqualTo(second.getPrivate());
         assertThat(first.getPublic()).isEqualTo(second.getPublic());
@@ -40,8 +43,18 @@ class JwtKeyConfigTest {
 
     @Test
     void malformedPemFailsFastRatherThanSilentlyFallingBackToAnEphemeralKey() {
-        assertThatThrownBy(() -> new JwtKeyConfig("not-a-valid-key", "not-a-valid-key")
+        assertThatThrownBy(() -> new JwtKeyConfig("not-a-valid-key", "not-a-valid-key",
+                new MockEnvironment())
                 .jwtSigningKeyPair())
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void withNoConfiguredKeysUnderProdProfileStartupFailsFastInsteadOfGeneratingAnEphemeralKey() {
+        MockEnvironment prodEnvironment = new MockEnvironment();
+        prodEnvironment.setActiveProfiles("prod");
+
+        assertThatThrownBy(() -> new JwtKeyConfig("", "", prodEnvironment).jwtSigningKeyPair())
                 .isInstanceOf(IllegalStateException.class);
     }
 
