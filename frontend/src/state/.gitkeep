@@ -1,0 +1,2 @@
+Phase 1 (FRONTEND-PDR.md §18, §9, §10, §8.2): connectionStore.ts, clockOffset.ts, pendingBids.ts
+(Zustand stores). Intentionally empty in Phase 0.
