@@ -1,8 +1,8 @@
 plugins {
     java
-    id("org.springframework.boot") version "3.3.4"
-    id("io.spring.dependency-management") version "1.1.6"
-    id("com.github.spotbugs") version "6.0.26"
+    id("org.springframework.boot") version "3.5.16"
+    id("io.spring.dependency-management") version "1.1.7"
+    id("com.github.spotbugs") version "6.5.11"
 }
 
 group = "com.bidstream"
@@ -44,12 +44,14 @@ dependencies {
 
     // Security
     implementation("org.springframework.boot:spring-boot-starter-security")
-    implementation("io.jsonwebtoken:jjwt-api:0.12.6")
-    runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.6")
-    runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")
+    implementation("io.jsonwebtoken:jjwt-api:0.13.0")
+    runtimeOnly("io.jsonwebtoken:jjwt-impl:0.13.0")
+    runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.13.0")
 
     // API documentation (OpenAPI / Swagger UI)
-    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0")
+    // NB: springdoc 3.x tracks Spring Boot 4 / Spring Framework 7 (Jackson 3) and is not
+    // compatible with the Spring Boot 3.x line we're on, so we stay on the latest 2.x release.
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.9.1")
 
     // Observability
     implementation("org.springframework.boot:spring-boot-starter-actuator")
@@ -64,11 +66,17 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.kafka:spring-kafka-test")
     testImplementation("org.springframework.security:spring-security-test")
-    testImplementation("org.testcontainers:junit-jupiter:1.21.4")
-    testImplementation("org.testcontainers:postgresql:1.21.4")
-    testImplementation("org.testcontainers:kafka:1.21.4")
-    testImplementation("com.redis:testcontainers-redis:2.2.2")
-    testImplementation("io.rest-assured:rest-assured:5.5.0")
+    // Testcontainers 2.x renamed the module artifacts to a "testcontainers-" prefix
+    // (junit-jupiter -> testcontainers-junit-jupiter, etc.) - see the 2.0 migration notes.
+    testImplementation("org.testcontainers:testcontainers-junit-jupiter:2.0.5")
+    testImplementation("org.testcontainers:testcontainers-postgresql:2.0.5")
+    testImplementation("org.testcontainers:testcontainers-kafka:2.0.5")
+    testImplementation("com.redis:testcontainers-redis:2.2.4")
+    // rest-assured 6.x requires Jackson 3 / Spring 7 (its RestAssured class fails to
+    // initialize without io.restassured.path.json.mapper.factory.Jackson3ObjectMapperFactory
+    // on the classpath) and is not compatible with the Spring Boot 3.5.x / Jackson 2 stack
+    // we're on, so we stay on the latest 5.x release instead of jumping to 6.x.
+    testImplementation("io.rest-assured:rest-assured:5.5.7")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
@@ -83,6 +91,18 @@ spotbugs {
     ignoreFailures.set(true)
     effort.set(com.github.spotbugs.snom.Effort.DEFAULT)
     reportLevel.set(com.github.spotbugs.snom.Confidence.HIGH)
+}
+
+// The io.spring.dependency-management plugin applies its BOM-managed versions to *every*
+// configuration by default, including SpotBugs's own tool configurations. That downgrades
+// commons-lang3 (pulled in transitively by spotbugs-core 4.10.4, which needs 3.20.0+ for
+// org.apache.commons.lang3.Strings) to the older version Spring Boot's BOM pins, which breaks
+// SpotBugs analysis with a NoClassDefFoundError. Force the version SpotBugs actually needs on
+// its own configurations only - this doesn't affect the versions used by application code.
+configurations.matching { it.name.startsWith("spotbugs") }.configureEach {
+    resolutionStrategy {
+        force("org.apache.commons:commons-lang3:3.20.0")
+    }
 }
 
 tasks.withType<com.github.spotbugs.snom.SpotBugsTask> {
