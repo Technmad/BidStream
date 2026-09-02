@@ -1,2 +1,0 @@
-Phase 1 (FRONTEND-PDR.md §18, §7): connectionManager.ts, contracts.ts, useAuctionChannel.ts.
-Intentionally empty in Phase 0 — no STOMP connection manager exists yet.
