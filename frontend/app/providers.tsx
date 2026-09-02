@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { useState } from "react";
+import { ConnectionManagerProvider } from "@/src/ws/ConnectionManagerProvider";
 
 /**
  * The root client-only provider boundary (FRONTEND-PDR.md §7.1, §17).
@@ -42,7 +43,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {children}
+      {/* Phase 1's connection-manager provider (§7) — slots in here, alongside
+          TanStack Query's provider, exactly as this file's own comment above
+          anticipated; no restructuring of app/layout.tsx needed. */}
+      <ConnectionManagerProvider>{children}</ConnectionManagerProvider>
       {process.env.NODE_ENV === "development" && <ReactQueryDevtools initialIsOpen={false} />}
     </QueryClientProvider>
   );

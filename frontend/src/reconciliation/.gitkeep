@@ -1,3 +1,0 @@
-Phase 1 (FRONTEND-PDR.md §18, §8.3): useReconciledAuction.ts — the one merge point
-between confirmed REST/WS state and the optimistic pending-bid overlay. Intentionally
-empty in Phase 0.
