@@ -59,3 +59,127 @@ export type AuctionResponse = {
 export async function getAuction(auctionId: string): Promise<AuctionResponse> {
   return fetchApi<AuctionResponse>(`/auctions/${auctionId}`, { method: "GET" });
 }
+
+/**
+ * TanStack Query key for a single auction's detail (§17's `auctionQueryKey`
+ * requirement) — mirrors `categoriesQueryKey`'s pattern (`src/api/categories.ts`)
+ * so the Server Component's `prefetchQuery` and the client `useQuery` reading it
+ * agree on the exact same key (§5.2's "no separate re-fetch" requirement).
+ */
+export function auctionQueryKey(auctionId: string) {
+  return ["auction", auctionId] as const;
+}
+
+/**
+ * `GET /auctions/{id}/bids` (§4.1) — public, paginated Spring `Page`. Only the
+ * fields the bid-history panel actually needs are typed (§12.1's data source) —
+ * the rest of Spring's `Page` envelope (`totalPages`, `number`, `size`, etc.) is
+ * left untyped on purpose per the task brief rather than modeled in full.
+ */
+export type BidHistoryEntry = {
+  id: string;
+  auctionId: string;
+  bidderId: string;
+  amount: string;
+  type: string;
+  status: string;
+  createdAt: string;
+};
+
+export type BidHistoryPage = {
+  content: BidHistoryEntry[];
+  totalElements: number;
+};
+
+export function bidHistoryQueryKey(auctionId: string, page: number, size: number) {
+  return ["auction", auctionId, "bids", page, size] as const;
+}
+
+export async function listBids(
+  auctionId: string,
+  page: number = 0,
+  size: number = 20,
+): Promise<BidHistoryPage> {
+  return fetchApi<BidHistoryPage>(
+    `/auctions/${auctionId}/bids?page=${page}&size=${size}`,
+    { method: "GET" },
+  );
+}
+
+/** `GET /auctions/{id}/leaderboard?limit=` (§4.1) — public, top-N `{bidderId, amount}`. */
+export type LeaderboardEntry = {
+  bidderId: string;
+  amount: string;
+};
+
+export function leaderboardQueryKey(auctionId: string, limit: number) {
+  return ["auction", auctionId, "leaderboard", limit] as const;
+}
+
+export async function getLeaderboard(
+  auctionId: string,
+  limit: number = 10,
+): Promise<LeaderboardEntry[]> {
+  return fetchApi<LeaderboardEntry[]>(
+    `/auctions/${auctionId}/leaderboard?limit=${limit}`,
+    { method: "GET" },
+  );
+}
+
+/** `202 {bidId, status:"PENDING", correlationId}` — §4.1's default (never `?wait=true`, §4.3/§8.4). */
+export type PlaceBidResponse = {
+  bidId: string;
+  status: string;
+  correlationId: string;
+};
+
+/**
+ * `POST /auctions/{id}/bids` (auth required, §4.1). Sets a client-generated
+ * `Idempotency-Key` header via `crypto.randomUUID()` — required by the backend
+ * contract, not optional. Body is a decimal string, never a `Number()`, per §4.1's
+ * "send as a decimal string to avoid float formatting surprises."
+ *
+ * Deliberately never appends `?wait=true` (§4.1, §4.3, §8.4).
+ */
+export async function placeBid(
+  auctionId: string,
+  amount: string,
+  accessToken: string,
+): Promise<PlaceBidResponse> {
+  return fetchApi<PlaceBidResponse>(`/auctions/${auctionId}/bids`, {
+    method: "POST",
+    body: { amount },
+    accessToken,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+}
+
+/** `POST /auctions/{id}/auto-bid` (auth) → `AutoBidResponse`. */
+export type AutoBidResponse = {
+  id: string;
+  auctionId: string;
+  bidderId: string;
+  maxAmount: string;
+  active: boolean;
+  createdAt: string;
+};
+
+export async function setAutoBid(
+  auctionId: string,
+  maxAmount: string,
+  accessToken: string,
+): Promise<AutoBidResponse> {
+  return fetchApi<AutoBidResponse>(`/auctions/${auctionId}/auto-bid`, {
+    method: "POST",
+    body: { maxAmount },
+    accessToken,
+  });
+}
+
+/** `DELETE /auctions/{id}/auto-bid` (auth) → `204`. */
+export async function cancelAutoBid(auctionId: string, accessToken: string): Promise<void> {
+  await fetchApi<void>(`/auctions/${auctionId}/auto-bid`, {
+    method: "DELETE",
+    accessToken,
+  });
+}
