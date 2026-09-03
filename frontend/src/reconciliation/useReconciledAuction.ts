@@ -183,6 +183,15 @@ export type ReconciledAuctionView = {
   lastBidResult: { correlationId: string; result: ParsedBidResult } | null;
   /** The most recent `OUTBID` notice, for a toast (§8.3 step 5). */
   lastOutbid: { newPrice: string } | null;
+  /**
+   * The most recent `AUCTION_EXTENDED` frame this hook has observed for this
+   * auction, purely so the UI can render §12.1's required "unmissable, distinct
+   * visual moment" for it (`ExtendedBanner`) — not part of confirmed state (the
+   * new `endTime` is already folded into `confirmed` via the normal version-
+   * monotonic merge, step 2); this is only a transient event marker for the
+   * one-off banner. `null` until the first `AUCTION_EXTENDED` arrives.
+   */
+  lastExtended: { newEndTime: string } | null;
 };
 
 /**
@@ -200,6 +209,7 @@ export function useReconciledAuction(
   const [confirmed, setConfirmed] = useState<NormalizedConfirmedState | null>(initialConfirmed);
   const [lastBidResult, setLastBidResult] = useState<ReconciledAuctionView["lastBidResult"]>(null);
   const [lastOutbid, setLastOutbid] = useState<ReconciledAuctionView["lastOutbid"]>(null);
+  const [lastExtended, setLastExtended] = useState<ReconciledAuctionView["lastExtended"]>(null);
 
   const connectionState = useConnectionStore((s) => s.status);
   const myPendingBid = usePendingBidsStore((s) => s.getPendingBidForAuction(auctionId));
@@ -211,6 +221,9 @@ export function useReconciledAuction(
   const handleAuctionMessage = useCallback(
     (message: AuctionChannelMessage) => {
       setConfirmed((prev) => applyIncomingConfirmed(prev, message));
+      if (message.type === "AUCTION_EXTENDED") {
+        setLastExtended({ newEndTime: message.newEndTime });
+      }
     },
     [],
   );
@@ -249,6 +262,7 @@ export function useReconciledAuction(
     isEnded: isTerminal(confirmed?.status),
     lastBidResult,
     lastOutbid,
+    lastExtended,
   };
 }
 

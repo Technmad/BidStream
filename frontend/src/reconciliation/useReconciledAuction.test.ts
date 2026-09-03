@@ -1,12 +1,31 @@
-import { describe, expect, it } from "vitest";
+import { renderHook, act } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import type { ResyncMessage } from "@/src/ws/connectionManager";
 import type { AuctionEnded, AuctionExtended, BidResult, Outbid, PriceUpdate } from "@/src/ws/contracts";
+import type { AuctionChannelMessage } from "@/src/ws/connectionManager";
 import {
   applyIncomingConfirmed,
   reconcile,
   type NormalizedConfirmedState,
   type ReconciliationState,
+  useReconciledAuction,
 } from "./useReconciledAuction";
+
+// The hook-level test below (`lastExtended`) drives `useReconciledAuction` through
+// its actual WS-subscribing hooks rather than a real connection (§14 — "mocking
+// the reconciliation hook's output" for consumers, and the underlying primitive
+// itself is mocked here at the transport-hook boundary so no real STOMP/mock
+// broker is needed to exercise this purely-additive piece of state).
+let capturedAuctionHandler: ((message: AuctionChannelMessage) => void) | null = null;
+vi.mock("@/src/ws/useAuctionChannel", () => ({
+  useAuctionChannel: (
+    _auctionId: string | null | undefined,
+    onMessage: (message: AuctionChannelMessage) => void,
+  ) => {
+    capturedAuctionHandler = onMessage;
+  },
+  useNotificationsChannel: () => {},
+}));
 
 function priceUpdate(overrides: Partial<PriceUpdate> = {}): PriceUpdate {
   return {
@@ -193,5 +212,33 @@ describe("reconcile (§8.3 steps 2/4/5) — pure (confirmed, pending, message) -
     const state: ReconciliationState = { confirmed: null, pending: null };
     const { event } = reconcile(state, priceUpdate({ version: 1 }));
     expect(event).toBeNull();
+  });
+});
+
+describe("useReconciledAuction — lastExtended (§12.1's required AUCTION_EXTENDED visual moment)", () => {
+  it("is null until an AUCTION_EXTENDED frame arrives, then carries its newEndTime", () => {
+    capturedAuctionHandler = null;
+    const { result } = renderHook(() =>
+      useReconciledAuction("a1", { price: "100.00", winnerId: null, endTime: "2026-01-01T00:00:00Z", version: 1 }),
+    );
+
+    expect(result.current.lastExtended).toBeNull();
+
+    const extended: AuctionExtended = {
+      type: "AUCTION_EXTENDED",
+      auctionId: "a1",
+      newEndTime: "2026-01-01T00:05:00Z",
+      version: 2,
+      serverNow: "2026-01-01T00:00:00Z",
+    };
+
+    act(() => {
+      capturedAuctionHandler?.(extended);
+    });
+
+    expect(result.current.lastExtended).toEqual({ newEndTime: "2026-01-01T00:05:00Z" });
+    // Purely additive — the normal version-monotonic confirmed-state merge still applies.
+    expect(result.current.confirmed?.endTime).toBe("2026-01-01T00:05:00Z");
+    expect(result.current.confirmed?.version).toBe(2);
   });
 });
