@@ -13,6 +13,7 @@ export default function Home() {
         Phase 0 scaffold — auth flow and the SSR/hydration proof-of-pattern page.
       </p>
       <nav className="flex flex-col gap-2 text-sm underline">
+        <Link href="/auctions">Browse auctions</Link>
         <Link href="/login">Log in</Link>
         <Link href="/register">Register</Link>
         <Link href="/categories-ssr-check">SSR + HydrationBoundary check</Link>

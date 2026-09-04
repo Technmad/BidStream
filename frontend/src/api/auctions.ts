@@ -154,6 +154,70 @@ export async function placeBid(
   });
 }
 
+/**
+ * `GET /auctions` (§4.1, §12.2) — public, unauthenticated, paginated Spring
+ * `Page<AuctionResponse>`. Typed loosely for the envelope fields, matching
+ * `BidHistoryPage`'s convention above (only what Browse actually needs —
+ * `content`, `totalElements`, `totalPages`, `number` — rather than modeling
+ * every field Spring's generic `Page` serialization happens to emit).
+ */
+export type AuctionsPage = {
+  content: AuctionResponse[];
+  totalElements: number;
+  totalPages: number;
+  number: number;
+  size: number;
+};
+
+export type ListAuctionsParams = {
+  status?: AuctionStatus;
+  category?: string;
+  sellerId?: string;
+  q?: string;
+  page?: number;
+  size?: number;
+  /** Spring `Pageable`'s generic field-based sort, e.g. `"endTime,asc"` for "Ending Soon" (§12.2) — there is no `sort=endingSoon` alias. */
+  sort?: string;
+};
+
+/**
+ * TanStack Query key for a Browse listing, incorporating every filter/sort/page
+ * param so distinct filtered views cache independently — mirrors
+ * `categoriesQueryKey`'s naming convention (`src/api/categories.ts`) and
+ * `bidHistoryQueryKey`'s "params in the key" shape above.
+ */
+export function auctionsQueryKey(params: ListAuctionsParams = {}) {
+  return [
+    "auctions",
+    params.status ?? null,
+    params.category ?? null,
+    params.sellerId ?? null,
+    params.q ?? null,
+    params.page ?? 0,
+    params.size ?? 20,
+    params.sort ?? null,
+  ] as const;
+}
+
+/**
+ * `GET /auctions?status=&category=&sellerId=&q=&page=&size=&sort=` (§4.1, §12.2) —
+ * builds a query string from whichever params are actually present, omitting
+ * undefined ones and never sending an empty-string param.
+ */
+export async function listAuctions(params: ListAuctionsParams = {}): Promise<AuctionsPage> {
+  const search = new URLSearchParams();
+  if (params.status) search.set("status", params.status);
+  if (params.category) search.set("category", params.category);
+  if (params.sellerId) search.set("sellerId", params.sellerId);
+  if (params.q) search.set("q", params.q);
+  if (params.page !== undefined) search.set("page", String(params.page));
+  if (params.size !== undefined) search.set("size", String(params.size));
+  if (params.sort) search.set("sort", params.sort);
+
+  const qs = search.toString();
+  return fetchApi<AuctionsPage>(`/auctions${qs ? `?${qs}` : ""}`, { method: "GET" });
+}
+
 /** `POST /auctions/{id}/auto-bid` (auth) → `AutoBidResponse`. */
 export type AutoBidResponse = {
   id: string;
