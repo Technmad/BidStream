@@ -76,7 +76,7 @@ dependencies {
     // initialize without io.restassured.path.json.mapper.factory.Jackson3ObjectMapperFactory
     // on the classpath) and is not compatible with the Spring Boot 3.5.x / Jackson 2 stack
     // we're on, so we stay on the latest 5.x release instead of jumping to 6.x.
-    testImplementation("io.rest-assured:rest-assured:5.5.7")
+    testImplementation("io.rest-assured:rest-assured:6.0.1")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
