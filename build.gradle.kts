@@ -51,7 +51,7 @@ dependencies {
     // API documentation (OpenAPI / Swagger UI)
     // NB: springdoc 3.x tracks Spring Boot 4 / Spring Framework 7 (Jackson 3) and is not
     // compatible with the Spring Boot 3.x line we're on, so we stay on the latest 2.x release.
-    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.9.1")
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1")
 
     // Observability
     implementation("org.springframework.boot:spring-boot-starter-actuator")
